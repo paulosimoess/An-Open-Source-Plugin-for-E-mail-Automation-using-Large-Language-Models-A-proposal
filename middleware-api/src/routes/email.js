@@ -117,21 +117,39 @@ export default async function emailRoutes(fastify, opts) {
 
             await pool.query(
                 `UPDATE thread_categorizacao
-                SET ativa = false
-                WHERE thread_id = $1`,
-                [thread_id]
+                SET ativa = FALSE
+                WHERE thread_id = $1
+                    AND id_categoria <> $2`,
+                [thread_id, bestCategory.id_categoria]
             );
 
-            await pool.query(
-                `INSERT INTO thread_categorizacao
-                (id_categoria, thread_id, id_tipo_categorizacao, keywords, data, ativa)
-                VALUES ($1, $2, 1, $3, NOW(), true)`,
-                [
-                    bestCategory.id_categoria,
-                    thread_id,
-                    bestKeywords.join(",")
-                ]
+            const existingCat = await pool.query(
+                `SELECT id_categoria, thread_id
+                FROM thread_categorizacao
+                WHERE thread_id = $1
+                    AND id_categoria = $2`,
+                [thread_id, bestCategory.id_categoria]
             );
+
+            if (existingCat.rowCount > 0) {
+                await pool.query(
+                    `UPDATE thread_categorizacao
+                    SET id_tipo_categorizacao = 1,
+                        keywords = $3,
+                        data = NOW(),
+                        ativa = TRUE
+                    WHERE thread_id = $1
+                        AND id_categoria = $2`,
+                    [thread_id, bestCategory.id_categoria, bestKeywords.join(",")]
+                );
+            } else {
+                await pool.query(
+                    `INSERT INTO thread_categorizacao
+                    (id_categoria, thread_id, id_tipo_categorizacao, keywords, data, ativa)
+                    VALUES ($1, $2, 1, $3, NOW(), TRUE)`,
+                    [bestCategory.id_categoria, thread_id, bestKeywords.join(",")]
+                );
+            }
 
             await pool.query(
                 `UPDATE email
@@ -379,5 +397,54 @@ export default async function emailRoutes(fastify, opts) {
         }
     });
 
+    fastify.get("/implementacao/:id_implementacao/estado-email", async (request, reply) => {
+        const { id_implementacao } = request.params;
+        const { thread_id, message_id } = request.query;
+
+        if (!thread_id || !message_id) {
+            return reply.code(400).send({
+                error: "Os parâmetros 'thread_id' e 'message_id' são obrigatórios"
+            });
+        }
+
+        try {
+            const categoriaResult = await pool.query(
+                `SELECT c.id_categoria, c.nome, tc.keywords
+                 FROM thread_categorizacao tc
+                 JOIN categoria c ON c.id_categoria = tc.id_categoria
+                 JOIN thread t ON t.thread_id = tc.thread_id
+                 WHERE tc.thread_id = $1
+                   AND t.id_implementacao = $2
+                   AND tc.ativa = TRUE
+                 ORDER BY tc.data DESC NULLS LAST
+                 LIMIT 1`,
+                [thread_id, id_implementacao]
+            );
+
+            const respostaResult = await pool.query(
+                `SELECT id_resposta, conteudo, status, data_criacao, data_validacao
+                 FROM resposta_gerada
+                 WHERE message_id = $1
+                 ORDER BY data_criacao DESC
+                 LIMIT 1`,
+                [message_id]
+            );
+
+            const categoria = categoriaResult.rows[0] || null;
+            const resposta = respostaResult.rows[0] || null;
+
+            return reply.send({
+                categoria: categoria ? categoria.nome : null,
+                keywords_usadas: categoria?.keywords
+                    ? categoria.keywords.split(",").map(k => k.trim()).filter(Boolean)
+                    : [],
+                resposta: resposta || null
+            });
+
+        } catch (err) {
+            request.log.error(err);
+            return reply.code(500).send({ error: "Erro ao obter estado do email" });
+        }
+    });
 
 }

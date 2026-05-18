@@ -27,7 +27,7 @@
             <img width="64" height="64" src="../../assets/logo-filled.png" alt="AI4APGovernance" title="AI4APGovernance" />
             <div>
                 <h1 class="ms-font-xxl">AI4APGovernance</h1>
-                <p class="ms-font-m">Protótipo Outlook - leitura e categorização do email atual</p>
+                <p class="ms-font-m">Protótipo Outlook - leitura, categorização e resposta do email atual</p>
             </div>
         </header>
 
@@ -41,6 +41,18 @@
 
             <div role="button" id="categorize-button" class="ms-Button ms-Button--primary">
                 <span class="ms-Button-label">Categorizar email</span>
+            </div>
+
+            <div role="button" id="generate-response-button" class="ms-Button ms-Button--primary">
+                <span class="ms-Button-label">Gerar resposta</span>
+            </div>
+
+            <div role="button" id="refresh-response-button" class="ms-Button ms-Button--primary">
+                <span class="ms-Button-label">Atualizar resposta</span>
+            </div>
+
+            <div role="button" id="validate-response-button" class="ms-Button ms-Button--primary">
+                <span class="ms-Button-label">Validar resposta</span>
             </div>
         </section>
 
@@ -88,9 +100,22 @@
         </section>
 
         <section class="card">
-            <h2 class="ms-font-xl">Próximos blocos</h2>
-            <p>Resposta gerada: em desenvolvimento</p>
-            <p>Validação humana: em desenvolvimento</p>
+            <h2 class="ms-font-xl">Resposta gerada</h2>
+
+            <div class="field">
+                <div class="field-label">Estado da resposta</div>
+                <div id="response-job-status" class="field-value">Sem pedido enviado</div>
+            </div>
+
+            <div class="field">
+                <div class="field-label">ID da resposta</div>
+                <div id="response-id" class="field-value">-</div>
+            </div>
+
+            <div class="field">
+                <div class="field-label">Conteúdo da resposta</div>
+                <div id="response-content" class="field-value field-body">Nenhuma resposta carregada.</div>
+            </div>
         </section>
     </main>
 </body>

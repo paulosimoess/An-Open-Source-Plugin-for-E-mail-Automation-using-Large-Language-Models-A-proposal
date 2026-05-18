@@ -62,3 +62,56 @@ export async function categorizeEmail(emailData) {
     }
   );
 }
+
+export async function requestRagResponse(emailData) {
+  const { message_id, thread_id, remetente, assunto, corpo } = emailData;
+
+  return authorizedFetch(
+    `${API_BASE_URL}/implementacao/${IMPLEMENTACAO_ID}/thread/outlook-thread/email/outlook-message/resposta/rag`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        remetente,
+        assunto,
+        corpo,
+        message_id,
+        thread_id,
+      }),
+    }
+  );
+}
+
+export async function getLatestResponse(emailData) {
+  return authorizedFetch(
+    `${API_BASE_URL}/implementacao/${IMPLEMENTACAO_ID}/thread/outlook-thread/email/outlook-message/resposta`,
+    {
+      method: "GET",
+    }
+  );
+}
+
+export async function validateResponse(emailData, respostaId) {
+  return authorizedFetch(
+    `${API_BASE_URL}/implementacao/${IMPLEMENTACAO_ID}/thread/outlook-thread/email/outlook-message/resposta/${respostaId}/validar`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    }
+  );
+}
+
+export async function getEmailState(emailData) {
+  const { message_id, thread_id } = emailData;
+
+  const params = new URLSearchParams({
+    thread_id,
+    message_id,
+  });
+
+  return authorizedFetch(
+    `${API_BASE_URL}/implementacao/${IMPLEMENTACAO_ID}/estado-email?${params.toString()}`,
+    {
+      method: "GET",
+    }
+  );
+}

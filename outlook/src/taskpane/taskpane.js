@@ -1,8 +1,15 @@
 /* global document, Office */
 
-import { categorizeEmail } from "./api";
+import {
+  categorizeEmail,
+  requestRagResponse,
+  getLatestResponse,
+  validateResponse,
+  getEmailState,
+} from "./api";
 
 let currentEmailData = null;
+let lastResponseId = null;
 
 Office.onReady((info) => {
   if (info.host === Office.HostType.Outlook) {
@@ -10,14 +17,19 @@ Office.onReady((info) => {
     showElement("app-body", "flex");
 
     const runButton = document.getElementById("run");
-    if (runButton) {
-      runButton.onclick = run;
-    }
+    if (runButton) runButton.onclick = run;
 
     const categorizeButton = document.getElementById("categorize-button");
-    if (categorizeButton) {
-      categorizeButton.onclick = handleCategorize;
-    }
+    if (categorizeButton) categorizeButton.onclick = handleCategorize;
+
+    const generateResponseButton = document.getElementById("generate-response-button");
+    if (generateResponseButton) generateResponseButton.onclick = handleGenerateResponse;
+
+    const refreshResponseButton = document.getElementById("refresh-response-button");
+    if (refreshResponseButton) refreshResponseButton.onclick = handleRefreshResponse;
+
+    const validateResponseButton = document.getElementById("validate-response-button");
+    if (validateResponseButton) validateResponseButton.onclick = handleValidateResponse;
 
     run();
   }
@@ -118,6 +130,51 @@ function setStatus(message, isError = false) {
   statusEl.style.color = isError ? "#b00020" : "#333";
 }
 
+function resetCategorizationUi() {
+  setText("suggested-category", "Ainda não categorizado");
+  setText("used-keywords", "-");
+}
+
+function resetResponseUi() {
+  lastResponseId = null;
+  setText("response-job-status", "Sem pedido enviado");
+  setText("response-id", "-");
+  setText("response-content", "Nenhuma resposta carregada.");
+}
+
+async function hydrateEmailState() {
+  if (!currentEmailData) return;
+
+  try {
+    const state = await getEmailState(currentEmailData);
+    console.log("Estado atual do email:", state);
+
+    if (state?.categoria) {
+      setText("suggested-category", state.categoria);
+      setText(
+        "used-keywords",
+        state.keywords_usadas?.length
+          ? state.keywords_usadas.join(", ")
+          : "Nenhuma keyword usada"
+      );
+    }
+
+    if (state?.resposta) {
+      lastResponseId = state.resposta.id_resposta || null;
+      setText("response-id", state.resposta.id_resposta || "-");
+      setText("response-job-status", state.resposta.status || "Sem estado");
+      setText(
+        "response-content",
+        state.resposta.conteudo && state.resposta.conteudo.trim()
+          ? state.resposta.conteudo
+          : "Resposta ainda sem conteúdo disponível."
+      );
+    }
+  } catch (error) {
+    console.error("Erro ao hidratar estado do email:", error);
+  }
+}
+
 export async function run() {
   try {
     setStatus("A carregar dados do email...");
@@ -149,6 +206,10 @@ export async function run() {
     setText("item-conversation-id", conversationId);
     setHtml("item-body", normalizeBodyToHtml(body));
 
+    resetCategorizationUi();
+    resetResponseUi();
+    await hydrateEmailState();
+
     setStatus("Dados do email carregados com sucesso.");
   } catch (error) {
     console.error("Erro ao carregar dados do email:", error);
@@ -159,6 +220,9 @@ export async function run() {
     setText("item-id", "N/A");
     setText("item-conversation-id", "N/A");
     setHtml("item-body", "Não foi possível carregar o conteúdo do email.");
+
+    resetCategorizationUi();
+    resetResponseUi();
   }
 }
 
@@ -172,7 +236,7 @@ async function handleCategorize() {
 
     const result = await categorizeEmail(currentEmailData);
     console.log("Resultado da categorização:", result);
-    
+
     setText("suggested-category", result.categoria || "Sem categoria");
     setText(
       "used-keywords",
@@ -187,5 +251,83 @@ async function handleCategorize() {
     setStatus(`Erro ao categorizar: ${error.message}`, true);
     setText("suggested-category", "Erro");
     setText("used-keywords", "-");
+  }
+}
+
+async function handleGenerateResponse() {
+  try {
+    if (!currentEmailData) {
+      throw new Error("Ainda não existem dados do email carregados.");
+    }
+
+    setStatus("A pedir geração de resposta...");
+    setText("response-job-status", "PENDING");
+    setText("response-content", "Pedido enviado. Aguarde e depois clique em 'Atualizar resposta'.");
+
+    const result = await requestRagResponse(currentEmailData);
+    console.log("Pedido de resposta gerada:", result);
+
+    lastResponseId = result.job_id || null;
+    setText("response-id", result.job_id || "-");
+    setText("response-job-status", result.status || "queued");
+
+    setStatus("Pedido de geração de resposta enviado com sucesso.");
+  } catch (error) {
+    console.error("Erro ao gerar resposta:", error);
+    setStatus(`Erro ao gerar resposta: ${error.message}`, true);
+    setText("response-job-status", "Erro");
+  }
+}
+
+async function handleRefreshResponse() {
+  try {
+    if (!currentEmailData) {
+      throw new Error("Ainda não existem dados do email carregados.");
+    }
+
+    setStatus("A atualizar resposta gerada...");
+
+    const result = await getLatestResponse(currentEmailData);
+    console.log("Última resposta gerada:", result);
+
+    lastResponseId = result.id_resposta || null;
+    setText("response-id", result.id_resposta || "-");
+    setText("response-job-status", result.status || "Sem estado");
+    setText(
+      "response-content",
+      result.conteudo && result.conteudo.trim()
+        ? result.conteudo
+        : "Resposta ainda sem conteúdo disponível."
+    );
+
+    setStatus("Resposta atualizada com sucesso.");
+  } catch (error) {
+    console.error("Erro ao atualizar resposta:", error);
+    setStatus(`Erro ao atualizar resposta: ${error.message}`, true);
+  }
+}
+
+async function handleValidateResponse() {
+  try {
+    if (!currentEmailData) {
+      throw new Error("Ainda não existem dados do email carregados.");
+    }
+
+    if (!lastResponseId) {
+      throw new Error("Ainda não existe uma resposta carregada para validar.");
+    }
+
+    setStatus("A validar resposta...");
+
+    const result = await validateResponse(currentEmailData, lastResponseId);
+    console.log("Resposta validada:", result);
+
+    setText("response-job-status", "VALIDADA");
+    setText("response-content", result.resposta || "Resposta validada.");
+
+    setStatus("Resposta validada com sucesso.");
+  } catch (error) {
+    console.error("Erro ao validar resposta:", error);
+    setStatus(`Erro ao validar resposta: ${error.message}`, true);
   }
 }
