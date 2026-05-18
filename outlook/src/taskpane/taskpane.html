@@ -27,15 +27,20 @@
             <img width="64" height="64" src="../../assets/logo-filled.png" alt="AI4APGovernance" title="AI4APGovernance" />
             <div>
                 <h1 class="ms-font-xxl">AI4APGovernance</h1>
-                <p class="ms-font-m">Protótipo Outlook - leitura do email atual</p>
+                <p class="ms-font-m">Protótipo Outlook - leitura e categorização do email atual</p>
             </div>
         </header>
 
         <section class="card">
             <h2 class="ms-font-xl">Estado</h2>
             <p id="status-message">A iniciar...</p>
+
             <div role="button" id="run" class="ms-Button ms-Button--primary">
                 <span class="ms-Button-label">Atualizar dados do email</span>
+            </div>
+
+            <div role="button" id="categorize-button" class="ms-Button ms-Button--primary">
+                <span class="ms-Button-label">Categorizar email</span>
             </div>
         </section>
 
@@ -69,8 +74,21 @@
         </section>
 
         <section class="card">
+            <h2 class="ms-font-xl">Categoria sugerida</h2>
+
+            <div class="field">
+                <div class="field-label">Resultado da categorização</div>
+                <div id="suggested-category" class="field-value">Ainda não categorizado</div>
+            </div>
+
+            <div class="field">
+                <div class="field-label">Keywords usadas</div>
+                <div id="used-keywords" class="field-value">-</div>
+            </div>
+        </section>
+
+        <section class="card">
             <h2 class="ms-font-xl">Próximos blocos</h2>
-            <p>Categoria sugerida: em desenvolvimento</p>
             <p>Resposta gerada: em desenvolvimento</p>
             <p>Validação humana: em desenvolvimento</p>
         </section>

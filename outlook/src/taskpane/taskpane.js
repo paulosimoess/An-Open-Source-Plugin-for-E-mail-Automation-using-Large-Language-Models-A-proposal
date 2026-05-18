@@ -1,9 +1,8 @@
-/*
- * Copyright (c) Microsoft Corporation. All rights reserved. Licensed under the MIT license.
- * See LICENSE in the project root for license information.
- */
-
 /* global document, Office */
+
+import { categorizeEmail } from "./api";
+
+let currentEmailData = null;
 
 Office.onReady((info) => {
   if (info.host === Office.HostType.Outlook) {
@@ -15,7 +14,11 @@ Office.onReady((info) => {
       runButton.onclick = run;
     }
 
-    // Carrega logo os dados do email ao abrir o taskpane
+    const categorizeButton = document.getElementById("categorize-button");
+    if (categorizeButton) {
+      categorizeButton.onclick = handleCategorize;
+    }
+
     run();
   }
 });
@@ -95,8 +98,12 @@ function getFromDisplay(item) {
   return displayName || emailAddress || "N/A";
 }
 
+function getFromEmail(item) {
+  return item?.from?.emailAddress || "";
+}
+
 function getConversationId(item) {
-  return item?.conversationId || "N/A";
+  return item?.conversationId || item?.itemId || "N/A";
 }
 
 function getItemId(item) {
@@ -123,9 +130,18 @@ export async function run() {
 
     const subject = item.subject || "(Sem assunto)";
     const from = getFromDisplay(item);
+    const fromEmail = getFromEmail(item);
     const itemId = getItemId(item);
     const conversationId = getConversationId(item);
     const body = await getBodyAsync(item);
+
+    currentEmailData = {
+      message_id: itemId,
+      thread_id: conversationId,
+      remetente: fromEmail,
+      assunto: subject,
+      corpo: body,
+    };
 
     setText("item-subject", subject);
     setText("item-from", from);
@@ -143,5 +159,33 @@ export async function run() {
     setText("item-id", "N/A");
     setText("item-conversation-id", "N/A");
     setHtml("item-body", "Não foi possível carregar o conteúdo do email.");
+  }
+}
+
+async function handleCategorize() {
+  try {
+    if (!currentEmailData) {
+      throw new Error("Ainda não existem dados do email carregados.");
+    }
+
+    setStatus("A categorizar email...");
+
+    const result = await categorizeEmail(currentEmailData);
+    console.log("Resultado da categorização:", result);
+    
+    setText("suggested-category", result.categoria || "Sem categoria");
+    setText(
+      "used-keywords",
+      result.keywords_usadas?.length
+        ? result.keywords_usadas.join(", ")
+        : "Nenhuma keyword usada"
+    );
+
+    setStatus("Email categorizado com sucesso.");
+  } catch (error) {
+    console.error("Erro ao categorizar email:", error);
+    setStatus(`Erro ao categorizar: ${error.message}`, true);
+    setText("suggested-category", "Erro");
+    setText("used-keywords", "-");
   }
 }
