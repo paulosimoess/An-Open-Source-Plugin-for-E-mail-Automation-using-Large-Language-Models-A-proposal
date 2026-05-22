@@ -2,7 +2,6 @@
 
 <!DOCTYPE html>
 <html lang="pt">
-
 <head>
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
@@ -57,7 +56,31 @@
         </section>
 
         <section class="card">
-            <h2 class="ms-font-xl">Dados do email</h2>
+            <h2 class="ms-font-xl">Microsoft Graph - Inbox de teste</h2>
+
+            <p id="graph-status">Ainda não autenticado no Microsoft Graph.</p>
+
+            <div role="button" id="graph-login-button" class="ms-Button ms-Button--primary">
+                <span class="ms-Button-label">Iniciar sessão Microsoft</span>
+            </div>
+
+            <div role="button" id="graph-read-inbox-button" class="ms-Button ms-Button--primary">
+                <span class="ms-Button-label">Ler emails da Inbox</span>
+            </div>
+
+            <div class="field">
+                <div class="field-label">Conta autenticada</div>
+                <div id="graph-account" class="field-value">-</div>
+            </div>
+
+            <div class="field">
+                <div class="field-label">Últimos emails encontrados</div>
+                <div id="graph-inbox-list" class="field-value field-body">Nenhum email carregado.</div>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2 class="ms-font-xl">Dados do email aberto</h2>
 
             <div class="field">
                 <div class="field-label">Assunto</div>
@@ -119,5 +142,4 @@
         </section>
     </main>
 </body>
-
 </html>

@@ -8,13 +8,18 @@ import {
   getEmailState,
 } from "./api";
 
+import { MSAL_CLIENT_ID } from "./msal.local";
+
+let graphAccessToken = null;
+let graphAccountUsername = null;
+
 let currentEmailData = null;
 let lastResponseId = null;
 
 Office.onReady((info) => {
   if (info.host === Office.HostType.Outlook) {
     hideElement("sideload-msg");
-    showElement("app-body", "flex");
+    showElement("app-body", "block");
 
     const runButton = document.getElementById("run");
     if (runButton) runButton.onclick = run;
@@ -31,7 +36,14 @@ Office.onReady((info) => {
     const validateResponseButton = document.getElementById("validate-response-button");
     if (validateResponseButton) validateResponseButton.onclick = handleValidateResponse;
 
+    const graphLoginButton = document.getElementById("graph-login-button");
+    if (graphLoginButton) graphLoginButton.onclick = handleMicrosoftLogin;
+
+    const graphReadInboxButton = document.getElementById("graph-read-inbox-button");
+    if (graphReadInboxButton) graphReadInboxButton.onclick = handleReadInboxWithGraph;
+
     run();
+    updateGraphAccountUi();
   }
 });
 
@@ -61,7 +73,7 @@ function setHtml(id, value) {
 
 function escapeHtml(text) {
   if (!text) return "";
-  return text
+  return String(text)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -128,6 +140,14 @@ function setStatus(message, isError = false) {
 
   statusEl.textContent = message;
   statusEl.style.color = isError ? "#b00020" : "#333";
+}
+
+function setGraphStatus(message, isError = false) {
+  const graphStatusEl = document.getElementById("graph-status");
+  if (!graphStatusEl) return;
+
+  graphStatusEl.textContent = message;
+  graphStatusEl.style.color = isError ? "#b00020" : "#333";
 }
 
 function resetCategorizationUi() {
@@ -330,4 +350,164 @@ async function handleValidateResponse() {
     console.error("Erro ao validar resposta:", error);
     setStatus(`Erro ao validar resposta: ${error.message}`, true);
   }
+}
+
+function validateMsalConfig() {
+  if (!MSAL_CLIENT_ID || MSAL_CLIENT_ID === "COLOCAR_CLIENT_ID_AQUI") {
+    throw new Error("Falta configurar o MSAL_CLIENT_ID no ficheiro msal.local.js.");
+  }
+}
+
+function updateGraphAccountUi() {
+  if (!graphAccountUsername) {
+    setText("graph-account", "-");
+    setGraphStatus("Ainda não autenticado no Microsoft Graph.");
+    return;
+  }
+
+  setText("graph-account", graphAccountUsername);
+  setGraphStatus("Conta Microsoft autenticada.");
+}
+
+async function handleMicrosoftLogin() {
+  try {
+    validateMsalConfig();
+
+    setGraphStatus("A abrir autenticação Microsoft...");
+
+    Office.context.ui.displayDialogAsync(
+      "https://localhost:3000/auth.html",
+      {
+        height: 60,
+        width: 45,
+        displayInIframe: false,
+      },
+      (asyncResult) => {
+        if (asyncResult.status !== Office.AsyncResultStatus.Succeeded) {
+          setGraphStatus(
+            `Erro ao abrir janela de autenticação: ${asyncResult.error.message}`,
+            true
+          );
+          return;
+        }
+
+        const dialog = asyncResult.value;
+
+        dialog.addEventHandler(Office.EventType.DialogMessageReceived, (arg) => {
+          try {
+            const message = JSON.parse(arg.message);
+
+            if (message.type === "AUTH_SUCCESS") {
+              graphAccessToken = message.accessToken;
+              graphAccountUsername = message.username || "Conta autenticada";
+
+              updateGraphAccountUi();
+              setGraphStatus("Autenticação Microsoft concluída com sucesso.");
+
+              dialog.close();
+              return;
+            }
+
+            if (message.type === "AUTH_ERROR") {
+              setGraphStatus(`Erro no login Microsoft: ${message.message}`, true);
+              dialog.close();
+            }
+          } catch (error) {
+            setGraphStatus(`Erro ao processar resposta de autenticação: ${error.message}`, true);
+            dialog.close();
+          }
+        });
+
+        dialog.addEventHandler(Office.EventType.DialogEventReceived, (arg) => {
+          console.warn("DialogEventReceived:", arg);
+        });
+      }
+    );
+  } catch (error) {
+    console.error("Erro no login Microsoft:", error);
+    setGraphStatus(`Erro no login Microsoft: ${error.message}`, true);
+  }
+}
+
+async function getGraphAccessToken() {
+  if (!graphAccessToken) {
+    throw new Error("Ainda não existe sessão Microsoft. Clique primeiro em 'Iniciar sessão Microsoft'.");
+  }
+
+  return graphAccessToken;
+}
+
+async function handleReadInboxWithGraph() {
+  try {
+    setGraphStatus("A obter token Microsoft Graph...");
+    setHtml("graph-inbox-list", "A carregar emails da Inbox...");
+
+    const accessToken = await getGraphAccessToken();
+
+    setGraphStatus("A ler emails da Inbox via Microsoft Graph...");
+
+    const endpoint =
+      "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages" +
+      "?$top=10" +
+      "&$select=id,subject,from,receivedDateTime,bodyPreview,conversationId,isRead" +
+      "&$orderby=receivedDateTime desc";
+
+    const response = await fetch(endpoint, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+        Prefer: 'outlook.body-content-type="text"',
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || "Erro ao ler emails no Microsoft Graph.");
+    }
+
+    const data = await response.json();
+    const messages = data.value || [];
+
+    renderGraphInboxMessages(messages);
+    await updateGraphAccountUi();
+
+    setGraphStatus(`Leitura concluída. Emails carregados: ${messages.length}.`);
+  } catch (error) {
+    console.error("Erro ao ler Inbox via Graph:", error);
+    setGraphStatus(`Erro ao ler Inbox: ${error.message}`, true);
+    setHtml("graph-inbox-list", "Não foi possível carregar os emails da Inbox.");
+  }
+}
+
+function renderGraphInboxMessages(messages) {
+  if (!messages.length) {
+    setHtml("graph-inbox-list", "Nenhum email encontrado na Inbox.");
+    return;
+  }
+
+  const html = messages
+    .map((message, index) => {
+      const subject = escapeHtml(message.subject || "(Sem assunto)");
+      const fromName = escapeHtml(message.from?.emailAddress?.name || "Remetente desconhecido");
+      const fromAddress = escapeHtml(message.from?.emailAddress?.address || "");
+      const received = escapeHtml(message.receivedDateTime || "");
+      const preview = escapeHtml(message.bodyPreview || "");
+      const conversationId = escapeHtml(message.conversationId || "");
+      const readState = message.isRead ? "Lido" : "Não lido";
+
+      return `
+        <div style="margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #ddd;">
+          <strong>${index + 1}. ${subject}</strong><br>
+          <span><strong>De:</strong> ${fromName} ${fromAddress ? `&lt;${fromAddress}&gt;` : ""}</span><br>
+          <span><strong>Recebido:</strong> ${received}</span><br>
+          <span><strong>Estado:</strong> ${readState}</span><br>
+          <span><strong>Conversation ID:</strong> ${conversationId}</span><br>
+          <p style="margin-top: 6px;">${preview || "Sem pré-visualização disponível."}</p>
+        </div>
+      `;
+    })
+    .join("");
+
+  setHtml("graph-inbox-list", html);
 }
