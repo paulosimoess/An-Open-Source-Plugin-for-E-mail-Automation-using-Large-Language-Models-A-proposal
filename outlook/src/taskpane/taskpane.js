@@ -17,6 +17,8 @@ let lastGraphMessages = [];
 let currentEmailData = null;
 let lastResponseId = null;
 
+const GRAPH_STATE_CACHE_KEY = "ai4ap_graph_email_states";
+
 Office.onReady((info) => {
   if (info.host === Office.HostType.Outlook) {
     hideElement("sideload-msg");
@@ -45,6 +47,9 @@ Office.onReady((info) => {
 
     const graphProcessInboxButton = document.getElementById("graph-process-inbox-button");
     if (graphProcessInboxButton) graphProcessInboxButton.onclick = handleProcessInboxWithGraph;
+
+    const graphProcessUnreadButton = document.getElementById("graph-process-unread-button");
+    if (graphProcessUnreadButton) graphProcessUnreadButton.onclick = handleProcessUnreadInboxWithGraph;
 
     run();
     updateGraphAccountUi();
@@ -166,6 +171,99 @@ function resetResponseUi() {
   setText("response-content", "Nenhuma resposta carregada.");
 }
 
+function normalizeCacheText(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase();
+}
+
+function normalizeEmailAddress(value) {
+  const text = String(value || "").trim().toLowerCase();
+
+  const match = text.match(/<([^>]+)>/);
+  if (match && match[1]) {
+    return match[1].trim().toLowerCase();
+  }
+
+  return text;
+}
+
+function getEmailCacheKeys(emailData) {
+  const keys = [];
+
+  if (emailData?.message_id) {
+    keys.push(`message:${emailData.message_id}`);
+  }
+
+  if (emailData?.thread_id) {
+    keys.push(`thread:${emailData.thread_id}`);
+  }
+
+  const subject = normalizeCacheText(emailData?.assunto);
+  const sender = normalizeEmailAddress(emailData?.remetente);
+
+  if (subject && sender) {
+    keys.push(`subject_sender:${subject}|${sender}`);
+  }
+
+  return keys;
+}
+
+function getGraphStateCache() {
+  try {
+    const rawCache = sessionStorage.getItem(GRAPH_STATE_CACHE_KEY);
+    return rawCache ? JSON.parse(rawCache) : {};
+  } catch (error) {
+    console.warn("Erro ao ler cache de categorizações Graph:", error);
+    return {};
+  }
+}
+
+function saveGraphCategorizationState(emailData, categoria, keywordsUsadas) {
+  const keys = getEmailCacheKeys(emailData);
+
+  if (!keys.length) return;
+
+  const cache = getGraphStateCache();
+
+  const state = {
+    message_id: emailData.message_id,
+    thread_id: emailData.thread_id,
+    remetente: emailData.remetente,
+    assunto: emailData.assunto,
+    categoria,
+    keywords_usadas: keywordsUsadas || [],
+    processed_at: new Date().toISOString(),
+  };
+
+  keys.forEach((key) => {
+    cache[key] = state;
+  });
+
+  sessionStorage.setItem(GRAPH_STATE_CACHE_KEY, JSON.stringify(cache));
+}
+
+function getCachedGraphCategorization(emailData) {
+  const cache = getGraphStateCache();
+  const keys = getEmailCacheKeys(emailData);
+
+  for (const key of keys) {
+    if (cache[key]) {
+      return cache[key];
+    }
+  }
+
+  return null;
+}
+
+function applyCategorizationToCurrentEmail(categoria, keywordsUsadas) {
+  setText("suggested-category", categoria || "Sem categoria");
+  setText(
+    "used-keywords",
+    keywordsUsadas?.length ? keywordsUsadas.join(", ") : "Nenhuma keyword usada"
+  );
+}
+
 async function hydrateEmailState() {
   if (!currentEmailData) return;
 
@@ -173,14 +271,31 @@ async function hydrateEmailState() {
     const state = await getEmailState(currentEmailData);
     console.log("Estado atual do email:", state);
 
+    let hasBackendCategory = false;
+
     if (state?.categoria) {
-      setText("suggested-category", state.categoria);
-      setText(
-        "used-keywords",
-        state.keywords_usadas?.length
-          ? state.keywords_usadas.join(", ")
-          : "Nenhuma keyword usada"
+      hasBackendCategory = true;
+
+      applyCategorizationToCurrentEmail(
+        state.categoria,
+        state.keywords_usadas || []
       );
+    }
+
+    if (!hasBackendCategory) {
+      const cachedCategorization = getCachedGraphCategorization(currentEmailData);
+
+      if (cachedCategorization?.categoria) {
+        applyCategorizationToCurrentEmail(
+          cachedCategorization.categoria,
+          cachedCategorization.keywords_usadas || []
+        );
+
+        console.log(
+          "Categoria recuperada da cache Graph por conversationId:",
+          cachedCategorization
+        );
+      }
     }
 
     if (state?.resposta) {
@@ -196,6 +311,15 @@ async function hydrateEmailState() {
     }
   } catch (error) {
     console.error("Erro ao hidratar estado do email:", error);
+
+    const cachedCategorization = getCachedGraphCategorization(currentEmailData);
+
+    if (cachedCategorization?.categoria) {
+      applyCategorizationToCurrentEmail(
+        cachedCategorization.categoria,
+        cachedCategorization.keywords_usadas || []
+      );
+    }
   }
 }
 
@@ -219,7 +343,7 @@ export async function run() {
     currentEmailData = {
       message_id: itemId,
       thread_id: conversationId,
-      remetente: fromEmail,
+      remetente: normalizeEmailAddress(fromEmail || from),
       assunto: subject,
       corpo: body,
     };
@@ -261,13 +385,11 @@ async function handleCategorize() {
     const result = await categorizeEmail(currentEmailData);
     console.log("Resultado da categorização:", result);
 
-    setText("suggested-category", result.categoria || "Sem categoria");
-    setText(
-      "used-keywords",
-      result.keywords_usadas?.length
-        ? result.keywords_usadas.join(", ")
-        : "Nenhuma keyword usada"
-    );
+    const categoria = result.categoria || "Sem categoria";
+    const keywordsUsadas = result.keywords_usadas || [];
+
+    applyCategorizationToCurrentEmail(categoria, keywordsUsadas);
+    saveGraphCategorizationState(currentEmailData, categoria, keywordsUsadas);
 
     setStatus("Email categorizado com sucesso.");
   } catch (error) {
@@ -447,7 +569,7 @@ async function fetchInboxMessagesWithGraph() {
   const endpoint =
     "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages" +
     "?$top=10" +
-    "&$select=id,subject,from,receivedDateTime,bodyPreview,conversationId,isRead" +
+    "&$select=id,subject,from,receivedDateTime,bodyPreview,body,conversationId,isRead" +
     "&$orderby=receivedDateTime desc";
 
   const response = await fetch(endpoint, {
@@ -462,6 +584,33 @@ async function fetchInboxMessagesWithGraph() {
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(errorText || "Erro ao ler emails no Microsoft Graph.");
+  }
+
+  const data = await response.json();
+  return data.value || [];
+}
+
+async function fetchUnreadInboxMessagesWithGraph() {
+  const accessToken = await getGraphAccessToken();
+
+  const endpoint =
+    "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages" +
+    "?$top=10" +
+    "&$filter=isRead eq false" +
+    "&$select=id,subject,from,receivedDateTime,bodyPreview,body,conversationId,isRead";
+
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+      Prefer: 'outlook.body-content-type="text"',
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || "Erro ao ler emails não lidos no Microsoft Graph.");
   }
 
   const data = await response.json();
@@ -487,13 +636,23 @@ async function handleReadInboxWithGraph() {
   }
 }
 
+function getGraphMessageBodyText(message) {
+  const fullBody = message.body?.content || "";
+
+  if (fullBody && fullBody.trim()) {
+    return fullBody.trim();
+  }
+
+  return message.bodyPreview || "";
+}
+
 function convertGraphMessageToBackendEmail(message) {
   return {
     message_id: message.id,
     thread_id: message.conversationId || message.id,
     remetente: message.from?.emailAddress?.address || "",
     assunto: message.subject || "(Sem assunto)",
-    corpo: message.bodyPreview || "",
+    corpo: getGraphMessageBodyText(message),
   };
 }
 
@@ -507,12 +666,38 @@ async function getExistingCategorization(emailData) {
         keywords: state.keywords_usadas?.length
           ? state.keywords_usadas.join(", ")
           : "Sem keywords guardadas",
+        keywordsArray: state.keywords_usadas || [],
+      };
+    }
+
+    const cachedCategorization = getCachedGraphCategorization(emailData);
+
+    if (cachedCategorization?.categoria) {
+      return {
+        categoria: cachedCategorization.categoria,
+        keywords: cachedCategorization.keywords_usadas?.length
+          ? cachedCategorization.keywords_usadas.join(", ")
+          : "Sem keywords guardadas",
+        keywordsArray: cachedCategorization.keywords_usadas || [],
       };
     }
 
     return null;
   } catch (error) {
     console.warn("Email ainda sem estado guardado no backend:", error);
+
+    const cachedCategorization = getCachedGraphCategorization(emailData);
+
+    if (cachedCategorization?.categoria) {
+      return {
+        categoria: cachedCategorization.categoria,
+        keywords: cachedCategorization.keywords_usadas?.length
+          ? cachedCategorization.keywords_usadas.join(", ")
+          : "Sem keywords guardadas",
+        keywordsArray: cachedCategorization.keywords_usadas || [],
+      };
+    }
+
     return null;
   }
 }
@@ -558,14 +743,18 @@ async function handleProcessInboxWithGraph() {
         }
 
         const result = await categorizeEmail(emailData);
+        const categoria = result.categoria || "Sem categoria";
+        const keywordsUsadas = result.keywords_usadas || [];
+
+        saveGraphCategorizationState(emailData, categoria, keywordsUsadas);
 
         results.push({
           subject: emailData.assunto,
           from: emailData.remetente,
           status: "Categorizado agora",
-          categoria: result.categoria || "Sem categoria",
-          keywords: result.keywords_usadas?.length
-            ? result.keywords_usadas.join(", ")
+          categoria,
+          keywords: keywordsUsadas.length
+            ? keywordsUsadas.join(", ")
             : "Nenhuma keyword usada",
         });
 
@@ -590,6 +779,85 @@ async function handleProcessInboxWithGraph() {
     console.error("Erro ao processar Inbox:", error);
     setGraphStatus(`Erro ao processar Inbox: ${error.message}`, true);
     setHtml("graph-process-results", "Não foi possível processar os emails da Inbox.");
+  }
+}
+
+async function handleProcessUnreadInboxWithGraph() {
+  try {
+    setGraphStatus("A procurar emails novos/não lidos...");
+    setHtml("graph-process-results", "A carregar emails não lidos da Inbox...");
+
+    const messages = await fetchUnreadInboxMessagesWithGraph();
+    lastGraphMessages = messages;
+
+    renderGraphInboxMessages(messages);
+
+    if (!messages.length) {
+      setHtml("graph-process-results", "Nenhum email novo/não lido encontrado.");
+      setGraphStatus("Nenhum email novo/não lido encontrado na Inbox.");
+      return;
+    }
+
+    setGraphStatus(`Emails não lidos encontrados: ${messages.length}. A processar...`);
+
+    const results = [];
+
+    for (const message of messages) {
+      const emailData = convertGraphMessageToBackendEmail(message);
+
+      try {
+        const existingCategorization = await getExistingCategorization(emailData);
+
+        if (existingCategorization) {
+          results.push({
+            subject: emailData.assunto,
+            from: emailData.remetente,
+            status: "Já processado",
+            categoria: existingCategorization.categoria,
+            keywords: existingCategorization.keywords,
+          });
+
+          renderGraphProcessingResults(results);
+          continue;
+        }
+
+        const result = await categorizeEmail(emailData);
+        const categoria = result.categoria || "Sem categoria";
+        const keywordsUsadas = result.keywords_usadas || [];
+
+        saveGraphCategorizationState(emailData, categoria, keywordsUsadas);
+
+        results.push({
+          subject: emailData.assunto,
+          from: emailData.remetente,
+          status: "Categorizado agora",
+          categoria,
+          keywords: keywordsUsadas.length
+            ? keywordsUsadas.join(", ")
+            : "Nenhuma keyword usada",
+        });
+
+        renderGraphProcessingResults(results);
+      } catch (error) {
+        console.error("Erro ao processar email não lido:", error);
+
+        results.push({
+          subject: emailData.assunto,
+          from: emailData.remetente,
+          status: "Erro",
+          categoria: "-",
+          keywords: error.message || "Erro desconhecido",
+        });
+
+        renderGraphProcessingResults(results);
+      }
+    }
+
+    setGraphStatus(`Processamento de emails novos concluído. Emails tratados: ${results.length}.`);
+  } catch (error) {
+    console.error("Erro ao processar emails não lidos:", error);
+    setGraphStatus(`Erro ao processar emails novos: ${error.message}`, true);
+    setHtml("graph-process-results", "Não foi possível processar os emails novos/não lidos.");
   }
 }
 
