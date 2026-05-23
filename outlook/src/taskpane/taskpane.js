@@ -12,6 +12,7 @@ import { MSAL_CLIENT_ID } from "./msal.local";
 
 let graphAccessToken = null;
 let graphAccountUsername = null;
+let lastGraphMessages = [];
 
 let currentEmailData = null;
 let lastResponseId = null;
@@ -41,6 +42,9 @@ Office.onReady((info) => {
 
     const graphReadInboxButton = document.getElementById("graph-read-inbox-button");
     if (graphReadInboxButton) graphReadInboxButton.onclick = handleReadInboxWithGraph;
+
+    const graphProcessInboxButton = document.getElementById("graph-process-inbox-button");
+    if (graphProcessInboxButton) graphProcessInboxButton.onclick = handleProcessInboxWithGraph;
 
     run();
     updateGraphAccountUi();
@@ -437,40 +441,43 @@ async function getGraphAccessToken() {
   return graphAccessToken;
 }
 
+async function fetchInboxMessagesWithGraph() {
+  const accessToken = await getGraphAccessToken();
+
+  const endpoint =
+    "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages" +
+    "?$top=10" +
+    "&$select=id,subject,from,receivedDateTime,bodyPreview,conversationId,isRead" +
+    "&$orderby=receivedDateTime desc";
+
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+      Prefer: 'outlook.body-content-type="text"',
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || "Erro ao ler emails no Microsoft Graph.");
+  }
+
+  const data = await response.json();
+  return data.value || [];
+}
+
 async function handleReadInboxWithGraph() {
   try {
-    setGraphStatus("A obter token Microsoft Graph...");
+    setGraphStatus("A ler emails da Inbox via Microsoft Graph...");
     setHtml("graph-inbox-list", "A carregar emails da Inbox...");
 
-    const accessToken = await getGraphAccessToken();
-
-    setGraphStatus("A ler emails da Inbox via Microsoft Graph...");
-
-    const endpoint =
-      "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages" +
-      "?$top=10" +
-      "&$select=id,subject,from,receivedDateTime,bodyPreview,conversationId,isRead" +
-      "&$orderby=receivedDateTime desc";
-
-    const response = await fetch(endpoint, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: "application/json",
-        Prefer: 'outlook.body-content-type="text"',
-      },
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(errorText || "Erro ao ler emails no Microsoft Graph.");
-    }
-
-    const data = await response.json();
-    const messages = data.value || [];
+    const messages = await fetchInboxMessagesWithGraph();
+    lastGraphMessages = messages;
 
     renderGraphInboxMessages(messages);
-    await updateGraphAccountUi();
+    updateGraphAccountUi();
 
     setGraphStatus(`Leitura concluída. Emails carregados: ${messages.length}.`);
   } catch (error) {
@@ -478,6 +485,141 @@ async function handleReadInboxWithGraph() {
     setGraphStatus(`Erro ao ler Inbox: ${error.message}`, true);
     setHtml("graph-inbox-list", "Não foi possível carregar os emails da Inbox.");
   }
+}
+
+function convertGraphMessageToBackendEmail(message) {
+  return {
+    message_id: message.id,
+    thread_id: message.conversationId || message.id,
+    remetente: message.from?.emailAddress?.address || "",
+    assunto: message.subject || "(Sem assunto)",
+    corpo: message.bodyPreview || "",
+  };
+}
+
+async function getExistingCategorization(emailData) {
+  try {
+    const state = await getEmailState(emailData);
+
+    if (state?.categoria) {
+      return {
+        categoria: state.categoria,
+        keywords: state.keywords_usadas?.length
+          ? state.keywords_usadas.join(", ")
+          : "Sem keywords guardadas",
+      };
+    }
+
+    return null;
+  } catch (error) {
+    console.warn("Email ainda sem estado guardado no backend:", error);
+    return null;
+  }
+}
+
+async function handleProcessInboxWithGraph() {
+  try {
+    setGraphStatus("A processar emails da Inbox...");
+    setHtml("graph-process-results", "A verificar emails já processados...");
+
+    let messages = lastGraphMessages;
+
+    if (!messages.length) {
+      messages = await fetchInboxMessagesWithGraph();
+      lastGraphMessages = messages;
+      renderGraphInboxMessages(messages);
+    }
+
+    if (!messages.length) {
+      setHtml("graph-process-results", "Nenhum email encontrado para processar.");
+      setGraphStatus("Nenhum email encontrado na Inbox.");
+      return;
+    }
+
+    const results = [];
+
+    for (const message of messages) {
+      const emailData = convertGraphMessageToBackendEmail(message);
+
+      try {
+        const existingCategorization = await getExistingCategorization(emailData);
+
+        if (existingCategorization) {
+          results.push({
+            subject: emailData.assunto,
+            from: emailData.remetente,
+            status: "Já processado",
+            categoria: existingCategorization.categoria,
+            keywords: existingCategorization.keywords,
+          });
+
+          renderGraphProcessingResults(results);
+          continue;
+        }
+
+        const result = await categorizeEmail(emailData);
+
+        results.push({
+          subject: emailData.assunto,
+          from: emailData.remetente,
+          status: "Categorizado agora",
+          categoria: result.categoria || "Sem categoria",
+          keywords: result.keywords_usadas?.length
+            ? result.keywords_usadas.join(", ")
+            : "Nenhuma keyword usada",
+        });
+
+        renderGraphProcessingResults(results);
+      } catch (error) {
+        console.error("Erro ao processar email Graph:", error);
+
+        results.push({
+          subject: emailData.assunto,
+          from: emailData.remetente,
+          status: "Erro",
+          categoria: "-",
+          keywords: error.message || "Erro desconhecido",
+        });
+
+        renderGraphProcessingResults(results);
+      }
+    }
+
+    setGraphStatus(`Processamento concluído. Emails tratados: ${results.length}.`);
+  } catch (error) {
+    console.error("Erro ao processar Inbox:", error);
+    setGraphStatus(`Erro ao processar Inbox: ${error.message}`, true);
+    setHtml("graph-process-results", "Não foi possível processar os emails da Inbox.");
+  }
+}
+
+function renderGraphProcessingResults(results) {
+  if (!results.length) {
+    setHtml("graph-process-results", "Nenhum email processado.");
+    return;
+  }
+
+  const html = results
+    .map((result, index) => {
+      const subject = escapeHtml(result.subject || "(Sem assunto)");
+      const from = escapeHtml(result.from || "Remetente desconhecido");
+      const status = escapeHtml(result.status || "-");
+      const categoria = escapeHtml(result.categoria || "-");
+      const keywords = escapeHtml(result.keywords || "-");
+
+      return `
+        <div style="margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #ddd;">
+          <strong>${index + 1}. ${subject}</strong><br>
+          <span><strong>De:</strong> ${from}</span><br>
+          <span><strong>Estado:</strong> ${status}</span><br>
+          <span><strong>Categoria:</strong> ${categoria}</span><br>
+          <span><strong>Keywords:</strong> ${keywords}</span>
+        </div>
+      `;
+    })
+    .join("");
+
+  setHtml("graph-process-results", html);
 }
 
 function renderGraphInboxMessages(messages) {
