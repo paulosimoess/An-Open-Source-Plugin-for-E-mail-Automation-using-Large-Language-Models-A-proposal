@@ -101,12 +101,14 @@ export async function validateResponse(emailData, respostaId) {
 }
 
 export async function getEmailState(emailData) {
-  const { message_id, thread_id } = emailData;
+  const { message_id, thread_id, assunto, remetente } = emailData;
 
-  const params = new URLSearchParams({
-    thread_id,
-    message_id,
-  });
+  const params = new URLSearchParams();
+
+  if (thread_id) params.append("thread_id", thread_id);
+  if (message_id) params.append("message_id", message_id);
+  if (assunto) params.append("assunto", assunto);
+  if (remetente) params.append("remetente", remetente);
 
   return authorizedFetch(
     `${API_BASE_URL}/implementacao/${IMPLEMENTACAO_ID}/estado-email?${params.toString()}`,

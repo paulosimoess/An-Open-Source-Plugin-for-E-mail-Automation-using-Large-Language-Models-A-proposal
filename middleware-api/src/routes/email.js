@@ -456,46 +456,118 @@ export default async function emailRoutes(fastify, opts) {
 
     fastify.get("/implementacao/:id_implementacao/estado-email", async (request, reply) => {
         const { id_implementacao } = request.params;
-        const { thread_id, message_id } = request.query;
+        const { thread_id, message_id, assunto, remetente } = request.query;
 
-        if (!thread_id || !message_id) {
+        if (!thread_id && !message_id && (!assunto || !remetente)) {
             return reply.code(400).send({
-                error: "Os parâmetros 'thread_id' e 'message_id' são obrigatórios"
+                error: "É necessário enviar pelo menos 'message_id', 'thread_id' ou 'assunto' + 'remetente'"
             });
         }
 
         try {
-            const categoriaResult = await pool.query(
-                `SELECT c.id_categoria, c.nome, tc.keywords
-                 FROM thread_categorizacao tc
-                 JOIN categoria c ON c.id_categoria = tc.id_categoria
-                 JOIN thread t ON t.thread_id = tc.thread_id
-                 WHERE tc.thread_id = $1
-                   AND t.id_implementacao = $2
-                   AND tc.ativa = TRUE
-                 ORDER BY tc.data DESC NULLS LAST
-                 LIMIT 1`,
-                [thread_id, id_implementacao]
-            );
+            let resolvedEmail = null;
 
-            const respostaResult = await pool.query(
-                `SELECT id_resposta, conteudo, status, data_criacao, data_validacao
-                 FROM resposta_gerada
-                 WHERE message_id = $1
-                 ORDER BY data_criacao DESC
-                 LIMIT 1`,
-                [message_id]
-            );
+            if (message_id) {
+                const emailByMessage = await pool.query(
+                    `SELECT e.message_id, e.thread_id, e.remetente, t.assunto
+                    FROM email e
+                    JOIN thread t ON t.thread_id = e.thread_id
+                    WHERE e.message_id = $1
+                    AND e.id_implementacao = $2
+                    LIMIT 1`,
+                    [message_id, id_implementacao]
+                );
 
-            const categoria = categoriaResult.rows[0] || null;
-            const resposta = respostaResult.rows[0] || null;
+                if (emailByMessage.rowCount > 0) {
+                    resolvedEmail = emailByMessage.rows[0];
+                }
+            }
+
+            if (!resolvedEmail && thread_id) {
+                const emailByThread = await pool.query(
+                    `SELECT e.message_id, e.thread_id, e.remetente, t.assunto
+                    FROM email e
+                    JOIN thread t ON t.thread_id = e.thread_id
+                    WHERE e.thread_id = $1
+                    AND e.id_implementacao = $2
+                    ORDER BY e.message_id DESC
+                    LIMIT 1`,
+                    [thread_id, id_implementacao]
+                );
+
+                if (emailByThread.rowCount > 0) {
+                    resolvedEmail = emailByThread.rows[0];
+                }
+            }
+
+            if (!resolvedEmail && assunto && remetente) {
+                const emailBySubjectSender = await pool.query(
+                    `SELECT e.message_id, e.thread_id, e.remetente, t.assunto
+                    FROM email e
+                    JOIN thread t ON t.thread_id = e.thread_id
+                    WHERE e.id_implementacao = $1
+                    AND LOWER(TRIM(t.assunto)) = LOWER(TRIM($2))
+                    AND LOWER(TRIM(e.remetente)) = LOWER(TRIM($3))
+                    ORDER BY e.message_id DESC
+                    LIMIT 1`,
+                    [id_implementacao, assunto, remetente]
+                );
+
+                if (emailBySubjectSender.rowCount > 0) {
+                    resolvedEmail = emailBySubjectSender.rows[0];
+                }
+            }
+
+            const resolvedThreadId = resolvedEmail?.thread_id || thread_id || null;
+            const resolvedMessageId = resolvedEmail?.message_id || message_id || null;
+
+            let categoria = null;
+            let resposta = null;
+
+            if (resolvedThreadId) {
+                const categoriaResult = await pool.query(
+                    `SELECT c.id_categoria, c.nome, tc.keywords
+                    FROM thread_categorizacao tc
+                    JOIN categoria c ON c.id_categoria = tc.id_categoria
+                    JOIN thread t ON t.thread_id = tc.thread_id
+                    WHERE tc.thread_id = $1
+                    AND t.id_implementacao = $2
+                    AND tc.ativa = TRUE
+                    ORDER BY tc.data DESC NULLS LAST
+                    LIMIT 1`,
+                    [resolvedThreadId, id_implementacao]
+                );
+
+                categoria = categoriaResult.rows[0] || null;
+            }
+
+            if (resolvedMessageId) {
+                const respostaResult = await pool.query(
+                    `SELECT id_resposta, conteudo, status, data_criacao, data_validacao
+                    FROM resposta_gerada
+                    WHERE message_id = $1
+                    ORDER BY data_criacao DESC
+                    LIMIT 1`,
+                    [resolvedMessageId]
+                );
+
+                resposta = respostaResult.rows[0] || null;
+            }
 
             return reply.send({
                 categoria: categoria ? categoria.nome : null,
                 keywords_usadas: categoria?.keywords
                     ? categoria.keywords.split(",").map(k => k.trim()).filter(Boolean)
                     : [],
-                resposta: resposta || null
+                resposta: resposta || null,
+                email_resolvido: resolvedEmail
+                    ? {
+                        message_id: resolvedEmail.message_id,
+                        thread_id: resolvedEmail.thread_id,
+                        remetente: resolvedEmail.remetente,
+                        assunto: resolvedEmail.assunto
+                    }
+                    : null
             });
 
         } catch (err) {
