@@ -159,7 +159,9 @@ export default async function emailRoutes(fastify, opts) {
 
             const categoriasArray = Object.values(categorias);
 
-            const normalized = corpo.toLowerCase()
+            const textoParaCategorizar = `${assunto || ""} ${corpo || ""}`;
+
+            const normalized = textoParaCategorizar.toLowerCase()
                 .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
                 .replace(/[.,!?;:]/g, "")
                 .replace(/\s+/g, " ");

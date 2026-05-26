@@ -18,6 +18,7 @@ let currentEmailData = null;
 let lastResponseId = null;
 
 const GRAPH_STATE_CACHE_KEY = "ai4ap_graph_email_states";
+const GRAPH_AUTH_CACHE_KEY = "ai4ap_graph_auth_session";
 
 Office.onReady((info) => {
   if (info.host === Office.HostType.Outlook) {
@@ -52,7 +53,10 @@ Office.onReady((info) => {
     if (graphProcessUnreadButton) graphProcessUnreadButton.onclick = handleProcessUnreadInboxWithGraph;
 
     run();
-    updateGraphAccountUi();
+
+    if (!loadGraphAuthSession()) {
+      updateGraphAccountUi();
+    }
   }
 });
 
@@ -484,6 +488,86 @@ function validateMsalConfig() {
   }
 }
 
+function decodeJwtPayload(token) {
+  try {
+    const payload = token.split(".")[1];
+
+    if (!payload) return null;
+
+    const base64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const paddedBase64 = base64.padEnd(
+      base64.length + ((4 - (base64.length % 4)) % 4),
+      "="
+    );
+
+    return JSON.parse(atob(paddedBase64));
+  } catch (error) {
+    console.warn("Não foi possível ler expiração do token:", error);
+    return null;
+  }
+}
+
+function getAccessTokenExpiry(accessToken) {
+  const payload = decodeJwtPayload(accessToken);
+
+  if (payload?.exp) {
+    return payload.exp * 1000;
+  }
+
+  return Date.now() + 50 * 60 * 1000;
+}
+
+function saveGraphAuthSession(accessToken, username) {
+  if (!accessToken) return;
+
+  const session = {
+    accessToken,
+    username: username || "Conta autenticada",
+    expiresAt: getAccessTokenExpiry(accessToken),
+    savedAt: Date.now(),
+  };
+
+  localStorage.setItem(GRAPH_AUTH_CACHE_KEY, JSON.stringify(session));
+}
+
+function clearGraphAuthSession() {
+  localStorage.removeItem(GRAPH_AUTH_CACHE_KEY);
+}
+
+function loadGraphAuthSession() {
+  try {
+    const rawSession = localStorage.getItem(GRAPH_AUTH_CACHE_KEY);
+
+    if (!rawSession) {
+      return false;
+    }
+
+    const session = JSON.parse(rawSession);
+
+    if (!session.accessToken || !session.expiresAt) {
+      clearGraphAuthSession();
+      return false;
+    }
+
+    if (Number(session.expiresAt) <= Date.now() + 60 * 1000) {
+      clearGraphAuthSession();
+      return false;
+    }
+
+    graphAccessToken = session.accessToken;
+    graphAccountUsername = session.username || "Conta autenticada";
+
+    updateGraphAccountUi();
+    setGraphStatus("Sessão Microsoft recuperada automaticamente.");
+
+    return true;
+  } catch (error) {
+    console.warn("Erro ao recuperar sessão Microsoft local:", error);
+    clearGraphAuthSession();
+    return false;
+  }
+}
+
 function updateGraphAccountUi() {
   if (!graphAccountUsername) {
     setText("graph-account", "-");
@@ -495,24 +579,41 @@ function updateGraphAccountUi() {
   setGraphStatus("Conta Microsoft autenticada.");
 }
 
-async function handleMicrosoftLogin() {
+async function restoreGraphSession() {
   try {
     validateMsalConfig();
 
-    setGraphStatus("A abrir autenticação Microsoft...");
+    setGraphStatus("A tentar restaurar sessão Microsoft...");
+
+    await openMicrosoftAuthDialog("restore");
+  } catch (error) {
+    console.warn("Não foi possível restaurar a sessão Microsoft:", error);
+
+    graphAccessToken = null;
+    graphAccountUsername = null;
+    setText("graph-account", "-");
+    setGraphStatus("Ainda não autenticado no Microsoft Graph.");
+  }
+}
+
+function openMicrosoftAuthDialog(mode = "login") {
+  return new Promise((resolve, reject) => {
+    const url = `https://localhost:3000/auth.html?mode=${mode}`;
 
     Office.context.ui.displayDialogAsync(
-      "https://localhost:3000/auth.html",
+      url,
       {
-        height: 60,
-        width: 45,
+        height: mode === "restore" ? 30 : 60,
+        width: mode === "restore" ? 30 : 45,
         displayInIframe: false,
       },
       (asyncResult) => {
         if (asyncResult.status !== Office.AsyncResultStatus.Succeeded) {
-          setGraphStatus(
-            `Erro ao abrir janela de autenticação: ${asyncResult.error.message}`,
-            true
+          reject(
+            new Error(
+              asyncResult.error?.message ||
+                "Não foi possível abrir a janela de autenticação."
+            )
           );
           return;
         }
@@ -527,28 +628,75 @@ async function handleMicrosoftLogin() {
               graphAccessToken = message.accessToken;
               graphAccountUsername = message.username || "Conta autenticada";
 
+              saveGraphAuthSession(graphAccessToken, graphAccountUsername);
+
               updateGraphAccountUi();
               setGraphStatus("Autenticação Microsoft concluída com sucesso.");
 
               dialog.close();
+              resolve(true);
+              return;
+            }
+
+            if (message.type === "AUTH_NO_SESSION") {
+              graphAccessToken = null;
+              graphAccountUsername = null;
+              setText("graph-account", "-");
+
+              if (mode === "restore") {
+                setGraphStatus("Ainda não autenticado no Microsoft Graph.");
+              } else {
+                setGraphStatus(message.message || "Sessão Microsoft não encontrada.", true);
+              }
+
+              dialog.close();
+              resolve(false);
               return;
             }
 
             if (message.type === "AUTH_ERROR") {
-              setGraphStatus(`Erro no login Microsoft: ${message.message}`, true);
+              graphAccessToken = null;
+              graphAccountUsername = null;
+              setText("graph-account", "-");
+
+              const errorMessage = message.message || "Erro na autenticação Microsoft.";
+
+              if (mode === "restore") {
+                setGraphStatus("Ainda não autenticado no Microsoft Graph.");
+                dialog.close();
+                resolve(false);
+                return;
+              }
+
+              setGraphStatus(`Erro no login Microsoft: ${errorMessage}`, true);
               dialog.close();
+              reject(new Error(errorMessage));
             }
           } catch (error) {
-            setGraphStatus(`Erro ao processar resposta de autenticação: ${error.message}`, true);
             dialog.close();
+            reject(error);
           }
         });
 
         dialog.addEventHandler(Office.EventType.DialogEventReceived, (arg) => {
           console.warn("DialogEventReceived:", arg);
+
+          if (mode === "restore") {
+            resolve(false);
+          }
         });
       }
     );
+  });
+}
+
+async function handleMicrosoftLogin() {
+  try {
+    validateMsalConfig();
+
+    setGraphStatus("A abrir autenticação Microsoft...");
+
+    await openMicrosoftAuthDialog("login");
   } catch (error) {
     console.error("Erro no login Microsoft:", error);
     setGraphStatus(`Erro no login Microsoft: ${error.message}`, true);
@@ -557,7 +705,11 @@ async function handleMicrosoftLogin() {
 
 async function getGraphAccessToken() {
   if (!graphAccessToken) {
-    throw new Error("Ainda não existe sessão Microsoft. Clique primeiro em 'Iniciar sessão Microsoft'.");
+    const restored = loadGraphAuthSession();
+
+    if (!restored) {
+      throw new Error("Ainda não existe sessão Microsoft. Clique primeiro em 'Iniciar sessão Microsoft'.");
+    }
   }
 
   return graphAccessToken;
