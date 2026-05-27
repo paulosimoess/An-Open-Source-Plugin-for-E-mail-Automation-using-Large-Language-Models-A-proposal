@@ -26,12 +26,12 @@
             <img width="64" height="64" src="../../assets/logo-filled.png" alt="AI4APGovernance" title="AI4APGovernance" />
             <div>
                 <h1 class="ms-font-xxl">AI4APGovernance</h1>
-                <p class="ms-font-m">Protótipo Outlook - leitura, categorização e resposta do email atual</p>
+                <p class="ms-font-m">Plugin Outlook para leitura, categorização e apoio à resposta de emails.</p>
             </div>
         </header>
 
         <section class="card">
-            <h2 class="ms-font-xl">Estado</h2>
+            <h2 class="ms-font-xl">Ações do email aberto</h2>
             <p id="status-message">A iniciar...</p>
 
             <div role="button" id="run" class="ms-Button ms-Button--primary">
@@ -39,15 +39,15 @@
             </div>
 
             <div role="button" id="categorize-button" class="ms-Button ms-Button--primary">
-                <span class="ms-Button-label">Categorizar email</span>
+                <span class="ms-Button-label">Categorizar / recategorizar email aberto</span>
             </div>
 
             <div role="button" id="generate-response-button" class="ms-Button ms-Button--primary">
-                <span class="ms-Button-label">Gerar resposta</span>
+                <span class="ms-Button-label">Gerar sugestão de resposta</span>
             </div>
 
             <div role="button" id="refresh-response-button" class="ms-Button ms-Button--primary">
-                <span class="ms-Button-label">Atualizar resposta</span>
+                <span class="ms-Button-label">Atualizar resposta gerada</span>
             </div>
 
             <div role="button" id="validate-response-button" class="ms-Button ms-Button--primary">
@@ -56,39 +56,87 @@
         </section>
 
         <section class="card">
-            <h2 class="ms-font-xl">Microsoft Graph - Inbox de teste</h2>
+            <h2 class="ms-font-xl">Caixa de Entrada Outlook</h2>
 
-            <p id="graph-status">Ainda não autenticado no Microsoft Graph.</p>
+            <p id="graph-status">Sessão Microsoft não iniciada.</p>
 
             <div role="button" id="graph-login-button" class="ms-Button ms-Button--primary">
                 <span class="ms-Button-label">Iniciar sessão Microsoft</span>
             </div>
 
             <div role="button" id="graph-read-inbox-button" class="ms-Button ms-Button--primary">
-                <span class="ms-Button-label">Ler emails da Inbox</span>
+                <span class="ms-Button-label">Sincronizar emails</span>
             </div>
 
             <div role="button" id="graph-process-inbox-button" class="ms-Button ms-Button--primary">
-                <span class="ms-Button-label">Processar emails da Inbox</span>
+                <span class="ms-Button-label">Categorizar emails carregados</span>
             </div>
 
             <div role="button" id="graph-process-unread-button" class="ms-Button ms-Button--primary">
-                <span class="ms-Button-label">Processar emails novos/não lidos</span>
+                <span class="ms-Button-label">Categorizar novos emails</span>
             </div>
 
             <div class="field">
-                <div class="field-label">Conta autenticada</div>
+                <div class="field-label">Conta Microsoft ligada</div>
                 <div id="graph-account" class="field-value">-</div>
             </div>
 
             <div class="field">
-                <div class="field-label">Últimos emails encontrados</div>
+                <div class="field-label">Emails sincronizados</div>
                 <div id="graph-inbox-list" class="field-value field-body">Nenhum email carregado.</div>
             </div>
 
             <div class="field">
-                <div class="field-label">Resultado do processamento</div>
+                <div class="field-label">Resultado da categorização automática</div>
                 <div id="graph-process-results" class="field-value field-body">Nenhum email processado.</div>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2 class="ms-font-xl">Gestão de Categorias</h2>
+
+            <p id="category-status">Carregue as categorias para gerir palavras-chave.</p>
+
+            <div role="button" id="load-categories-button" class="ms-Button ms-Button--primary">
+                <span class="ms-Button-label">Carregar categorias</span>
+            </div>
+
+            <div class="field">
+                <div class="field-label">Categorias disponíveis</div>
+                <div id="categories-list" class="field-value field-body">Nenhuma categoria carregada.</div>
+            </div>
+
+            <div class="field">
+                <div class="field-label">Categoria selecionada</div>
+                <div id="selected-category" class="field-value">Nenhuma categoria selecionada.</div>
+            </div>
+
+            <div class="field">
+                <div class="field-label">Palavras-chave da categoria</div>
+                <div id="keywords-list" class="field-value field-body">Nenhuma palavra-chave carregada.</div>
+            </div>
+
+            <div class="field">
+                <div class="field-label">Adicionar palavra-chave</div>
+                <input id="new-keyword-input" class="text-input" type="text" placeholder="Ex.: árvore, poda, resíduos..." />
+
+                <div role="button" id="add-keyword-button" class="ms-Button ms-Button--primary">
+                    <span class="ms-Button-label">Adicionar palavra-chave</span>
+                </div>
+            </div>
+
+            <div class="field">
+                <div class="field-label">Criar nova categoria</div>
+
+                <input id="new-category-name-input" class="text-input" type="text" placeholder="Nome da categoria. Ex.: Espaços Verdes" />
+
+                <textarea id="new-category-question-input" class="text-input textarea-input" placeholder="Questão associada. Ex.: Pedidos relacionados com árvores, jardins e espaços verdes."></textarea>
+
+                <textarea id="new-category-purpose-input" class="text-input textarea-input" placeholder="Para que serve esta categoria? Ex.: Classificar pedidos de manutenção, poda e intervenção em espaços verdes."></textarea>
+
+                <div role="button" id="create-category-button" class="ms-Button ms-Button--primary">
+                    <span class="ms-Button-label">Criar categoria</span>
+                </div>
             </div>
         </section>
 
@@ -106,31 +154,35 @@
             </div>
 
             <div class="field">
-                <div class="field-label">Item ID</div>
-                <div id="item-id" class="field-value">-</div>
-            </div>
-
-            <div class="field">
-                <div class="field-label">Conversation ID</div>
-                <div id="item-conversation-id" class="field-value">-</div>
-            </div>
-
-            <div class="field">
                 <div class="field-label">Corpo do email</div>
                 <div id="item-body" class="field-value field-body">-</div>
             </div>
+
+            <details class="technical-details">
+                <summary>Mostrar detalhes técnicos</summary>
+
+                <div class="field">
+                    <div class="field-label">Item ID</div>
+                    <div id="item-id" class="field-value technical-id">-</div>
+                </div>
+
+                <div class="field">
+                    <div class="field-label">Conversation ID</div>
+                    <div id="item-conversation-id" class="field-value technical-id">-</div>
+                </div>
+            </details>
         </section>
 
         <section class="card">
-            <h2 class="ms-font-xl">Categoria sugerida</h2>
+            <h2 class="ms-font-xl">Categoria do email</h2>
 
             <div class="field">
-                <div class="field-label">Resultado da categorização</div>
+                <div class="field-label">Categoria atribuída</div>
                 <div id="suggested-category" class="field-value">Ainda não categorizado</div>
             </div>
 
             <div class="field">
-                <div class="field-label">Keywords usadas</div>
+                <div class="field-label">Palavras-chave identificadas</div>
                 <div id="used-keywords" class="field-value">-</div>
             </div>
         </section>
@@ -149,7 +201,7 @@
             </div>
 
             <div class="field">
-                <div class="field-label">Conteúdo da resposta</div>
+                <div class="field-label">Conteúdo sugerido</div>
                 <div id="response-content" class="field-value field-body">Nenhuma resposta carregada.</div>
             </div>
         </section>

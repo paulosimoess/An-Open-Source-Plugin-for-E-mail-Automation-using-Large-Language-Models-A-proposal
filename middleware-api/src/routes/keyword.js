@@ -1,5 +1,14 @@
 import { pool } from "../db.js";
 
+function normalizeText(value) {
+    return String(value || "")
+        .trim()
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/\s+/g, " ");
+}
+
 export default async function keywordRoutes(fastify, opts) {
     // GET /implementacao/:id_implementacao/categoria/:id_categoria/keywords
     fastify.get("/implementacao/:id_implementacao/categoria/:id_categoria/keywords", async (request, reply) => {
@@ -27,29 +36,50 @@ export default async function keywordRoutes(fastify, opts) {
 
     // POST /implementacao/:id_implementacao/categoria/:id_categoria/keyword
     fastify.post("/implementacao/:id_implementacao/categoria/:id_categoria/keyword", async (request, reply) => {
-    const { id_implementacao, id_categoria } = request.params;
-    const { keyword } = request.body;
+        const { id_implementacao, id_categoria } = request.params;
+        let { keyword } = request.body;
 
-    if (!keyword) {
-        return reply.code(400).send({ error: "Campo 'keyword' é obrigatório" });
-    }
+        if (!keyword) {
+            return reply.code(400).send({ error: "Campo 'keyword' é obrigatório" });
+        }
 
-    try {
-        // Insere uma nova keyword na categoria
-        const result = await pool.query(
-        `INSERT INTO keyword (id_categoria, keyword)
-        VALUES ($1, $2) RETURNING *`,
-        [id_categoria, keyword]
-        );
+        keyword = keyword.trim();
 
-        reply.code(201).send({
-        message: "Keyword adicionada com sucesso",
-        keyword: result.rows[0],
-        });
-    } catch (err) {
-        request.log.error(err);
-        reply.code(500).send({ error: "Erro ao adicionar keyword" });
-    }
+        try {
+            const existingKeywords = await pool.query(
+                `SELECT id_keyword, keyword
+                FROM keyword
+                WHERE id_categoria = $1`,
+                [id_categoria]
+            );
+
+            const normalizedNewKeyword = normalizeText(keyword);
+
+            const duplicate = existingKeywords.rows.find(
+                row => normalizeText(row.keyword) === normalizedNewKeyword
+            );
+
+            if (duplicate) {
+                return reply.code(409).send({
+                    error: "Esta palavra-chave já existe nesta categoria",
+                    keyword: duplicate
+                });
+            }
+
+            const result = await pool.query(
+                `INSERT INTO keyword (id_categoria, keyword)
+                VALUES ($1, $2) RETURNING *`,
+                [id_categoria, keyword]
+            );
+
+            reply.code(201).send({
+                message: "Keyword adicionada com sucesso",
+                keyword: result.rows[0],
+            });
+        } catch (err) {
+            request.log.error(err);
+            reply.code(500).send({ error: "Erro ao adicionar keyword" });
+        }
     });
 
     // DELETE /implementacao/:id_implementacao/categoria/:id_categoria/keyword/:id_keyword

@@ -6,6 +6,11 @@ import {
   getLatestResponse,
   validateResponse,
   getEmailState,
+  getCategories,
+  getCategoryKeywords,
+  addCategoryKeyword,
+  deleteCategoryKeyword,
+  createCategory,
 } from "./api";
 
 import { MSAL_CLIENT_ID } from "./msal.local";
@@ -13,9 +18,10 @@ import { MSAL_CLIENT_ID } from "./msal.local";
 let graphAccessToken = null;
 let graphAccountUsername = null;
 let lastGraphMessages = [];
-
 let currentEmailData = null;
 let lastResponseId = null;
+let categoriesCache = [];
+let selectedCategory = null;
 
 const GRAPH_STATE_CACHE_KEY = "ai4ap_graph_email_states";
 const GRAPH_AUTH_CACHE_KEY = "ai4ap_graph_auth_session";
@@ -52,6 +58,27 @@ Office.onReady((info) => {
     const graphProcessUnreadButton = document.getElementById("graph-process-unread-button");
     if (graphProcessUnreadButton) graphProcessUnreadButton.onclick = handleProcessUnreadInboxWithGraph;
 
+    const loadCategoriesButton = document.getElementById("load-categories-button");
+    if (loadCategoriesButton) loadCategoriesButton.onclick = handleLoadCategories;
+
+    const addKeywordButton = document.getElementById("add-keyword-button");
+    if (addKeywordButton) addKeywordButton.onclick = handleAddKeyword;
+
+    const createCategoryButton = document.getElementById("create-category-button");
+    if (createCategoryButton) createCategoryButton.onclick = handleCreateCategory;
+
+    const keywordsList = document.getElementById("keywords-list");
+    if (keywordsList) {
+      keywordsList.onclick = (event) => {
+        const removeButton = event.target.closest(".keyword-remove");
+
+        if (!removeButton) return;
+
+        const keywordId = removeButton.getAttribute("data-keyword-id");
+        handleDeleteKeyword(keywordId);
+      };
+    }
+
     run();
 
     if (!loadGraphAuthSession()) {
@@ -85,7 +112,8 @@ function setHtml(id, value) {
 }
 
 function escapeHtml(text) {
-  if (!text) return "";
+  if (text === null || text === undefined) return "";
+
   return String(text)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -579,23 +607,6 @@ function updateGraphAccountUi() {
   setGraphStatus("Conta Microsoft autenticada.");
 }
 
-async function restoreGraphSession() {
-  try {
-    validateMsalConfig();
-
-    setGraphStatus("A tentar restaurar sessão Microsoft...");
-
-    await openMicrosoftAuthDialog("restore");
-  } catch (error) {
-    console.warn("Não foi possível restaurar a sessão Microsoft:", error);
-
-    graphAccessToken = null;
-    graphAccountUsername = null;
-    setText("graph-account", "-");
-    setGraphStatus("Ainda não autenticado no Microsoft Graph.");
-  }
-}
-
 function openMicrosoftAuthDialog(mode = "login") {
   return new Promise((resolve, reject) => {
     const url = `https://localhost:3000/auth.html?mode=${mode}`;
@@ -1072,4 +1083,256 @@ function renderGraphInboxMessages(messages) {
     .join("");
 
   setHtml("graph-inbox-list", html);
+}
+
+function setCategoryStatus(message, isError = false) {
+  const statusEl = document.getElementById("category-status");
+  if (!statusEl) return;
+
+  statusEl.textContent = message;
+  statusEl.style.color = isError ? "#b00020" : "#333";
+}
+
+async function handleLoadCategories() {
+  try {
+    setCategoryStatus("A carregar categorias...");
+    setHtml("categories-list", "A carregar categorias...");
+    setText("selected-category", "Nenhuma categoria selecionada.");
+    setHtml("keywords-list", "Nenhuma palavra-chave carregada.");
+
+    const categories = await getCategories();
+
+    categoriesCache = Array.isArray(categories) ? categories : [];
+    selectedCategory = null;
+
+    renderCategoriesList(categoriesCache);
+
+    setCategoryStatus(`Categorias carregadas: ${categoriesCache.length}.`);
+  } catch (error) {
+    console.error("Erro ao carregar categorias:", error);
+    setCategoryStatus(`Erro ao carregar categorias: ${error.message}`, true);
+    setHtml("categories-list", "Não foi possível carregar as categorias.");
+  }
+}
+
+function renderCategoriesList(categories) {
+  if (!categories.length) {
+    setHtml("categories-list", "Nenhuma categoria encontrada.");
+    return;
+  }
+
+  const html = categories
+    .map((category) => {
+      const id = escapeHtml(category.id_categoria);
+      const name = escapeHtml(category.nome || "Categoria sem nome");
+      const description = escapeHtml(category.para_que_serve || category.questao || "");
+
+      return `
+        <div class="category-item" data-category-id="${id}">
+          <div class="category-name">${name}</div>
+          ${
+            description
+              ? `<div class="category-meta">${description}</div>`
+              : `<div class="category-meta">ID: ${id}</div>`
+          }
+        </div>
+      `;
+    })
+    .join("");
+
+  setHtml("categories-list", html);
+
+  const categoryItems = document.querySelectorAll("#categories-list .category-item");
+
+  categoryItems.forEach((item) => {
+    item.onclick = () => {
+      const categoryId = item.getAttribute("data-category-id");
+      handleSelectCategory(categoryId);
+    };
+  });
+}
+
+async function handleSelectCategory(categoryId) {
+  try {
+    selectedCategory = categoriesCache.find(
+      (category) => String(category.id_categoria) === String(categoryId)
+    );
+
+    if (!selectedCategory) {
+      throw new Error("Categoria selecionada não encontrada.");
+    }
+
+    document.querySelectorAll("#categories-list .category-item").forEach((item) => {
+      item.classList.remove("selected");
+    });
+
+    const selectedElement = document.querySelector(
+      `#categories-list .category-item[data-category-id="${selectedCategory.id_categoria}"]`
+    );
+
+    if (selectedElement) {
+      selectedElement.classList.add("selected");
+    }
+
+    setText("selected-category", selectedCategory.nome || "Categoria sem nome");
+    setHtml("keywords-list", "A carregar palavras-chave...");
+    setCategoryStatus(`Categoria selecionada: ${selectedCategory.nome}`);
+
+    await reloadSelectedCategoryKeywords();
+  } catch (error) {
+    console.error("Erro ao selecionar categoria:", error);
+    setCategoryStatus(`Erro ao selecionar categoria: ${error.message}`, true);
+    setHtml("keywords-list", "Não foi possível carregar as palavras-chave.");
+  }
+}
+
+async function reloadSelectedCategoryKeywords() {
+  if (!selectedCategory) {
+    setHtml("keywords-list", "Seleciona primeiro uma categoria.");
+    return;
+  }
+
+  const keywords = await getCategoryKeywords(selectedCategory.id_categoria);
+  renderKeywordsList(keywords);
+}
+
+function getKeywordId(keyword) {
+  return keyword?.id_keyword ?? keyword?.id ?? keyword?.keyword_id ?? "";
+}
+
+function renderKeywordsList(keywords) {
+  if (!keywords.length) {
+    setHtml("keywords-list", "Esta categoria ainda não tem palavras-chave.");
+    return;
+  }
+
+  const html = keywords
+    .map((keyword) => {
+      const rawKeywordId = getKeywordId(keyword);
+      const keywordId = escapeHtml(rawKeywordId);
+      const keywordText = escapeHtml(keyword.keyword || "");
+
+      return `
+        <div class="keyword-item">
+          <span>${keywordText}</span>
+          <button type="button" class="keyword-remove" data-keyword-id="${keywordId}">
+            Remover
+          </button>
+        </div>
+      `;
+    })
+    .join("");
+
+  setHtml("keywords-list", html);
+}
+
+async function handleAddKeyword() {
+  try {
+    if (!selectedCategory) {
+      throw new Error("Seleciona primeiro uma categoria.");
+    }
+
+    const input = document.getElementById("new-keyword-input");
+    const keyword = input?.value?.trim();
+
+    if (!keyword) {
+      throw new Error("Escreve uma palavra-chave antes de adicionar.");
+    }
+
+    setCategoryStatus(`A adicionar palavra-chave "${keyword}"...`);
+
+    await addCategoryKeyword(selectedCategory.id_categoria, keyword);
+
+    if (input) {
+      input.value = "";
+    }
+
+    await reloadSelectedCategoryKeywords();
+
+    setCategoryStatus(`Palavra-chave "${keyword}" adicionada com sucesso.`);
+  } catch (error) {
+    console.error("Erro ao adicionar palavra-chave:", error);
+    setCategoryStatus(`Erro ao adicionar palavra-chave: ${error.message}`, true);
+  }
+}
+
+async function handleDeleteKeyword(keywordId) {
+  try {
+    if (!selectedCategory) {
+      throw new Error("Seleciona primeiro uma categoria.");
+    }
+
+    const cleanKeywordId = String(keywordId || "").trim();
+    const cleanCategoryId = String(selectedCategory.id_categoria || "").trim();
+
+    setCategoryStatus(
+      `DEBUG remover → categoria=${cleanCategoryId}, keyword=${cleanKeywordId}`
+    );
+
+    console.log("DEBUG remover keyword:", {
+      selectedCategory,
+      cleanCategoryId,
+      cleanKeywordId,
+    });
+
+    if (!cleanKeywordId || !/^\d+$/.test(cleanKeywordId)) {
+      throw new Error(`ID da palavra-chave inválido: ${cleanKeywordId || "vazio"}`);
+    }
+
+    if (!cleanCategoryId || !/^\d+$/.test(cleanCategoryId)) {
+      throw new Error(`ID da categoria inválido: ${cleanCategoryId || "vazio"}`);
+    }
+
+    await deleteCategoryKeyword(cleanCategoryId, cleanKeywordId);
+
+    await reloadSelectedCategoryKeywords();
+
+    setCategoryStatus(
+      `Palavra-chave ${cleanKeywordId} removida com sucesso da categoria ${cleanCategoryId}.`
+    );
+  } catch (error) {
+    console.error("Erro ao remover palavra-chave:", error);
+    setCategoryStatus(`Erro ao remover palavra-chave: ${error.message}`, true);
+  }
+}
+
+async function handleCreateCategory() {
+  try {
+    const nameInput = document.getElementById("new-category-name-input");
+    const questionInput = document.getElementById("new-category-question-input");
+    const purposeInput = document.getElementById("new-category-purpose-input");
+
+    const nome = nameInput?.value?.trim();
+    const questao = questionInput?.value?.trim();
+    const paraQueServe = purposeInput?.value?.trim();
+
+    if (!nome) {
+      throw new Error("Indica o nome da nova categoria.");
+    }
+
+    setCategoryStatus(`A criar categoria "${nome}"...`);
+
+    const result = await createCategory({
+      nome,
+      questao,
+      paraQueServe,
+    });
+
+    console.log("Categoria criada:", result);
+
+    if (nameInput) nameInput.value = "";
+    if (questionInput) questionInput.value = "";
+    if (purposeInput) purposeInput.value = "";
+
+    await handleLoadCategories();
+
+    setCategoryStatus(
+      `Categoria "${nome}" criada com sucesso. Keywords geradas: ${
+        result.keywordsGeradas?.length ? result.keywordsGeradas.join(", ") : "nenhuma"
+      }.`
+    );
+  } catch (error) {
+    console.error("Erro ao criar categoria:", error);
+    setCategoryStatus(`Erro ao criar categoria: ${error.message}`, true);
+  }
 }

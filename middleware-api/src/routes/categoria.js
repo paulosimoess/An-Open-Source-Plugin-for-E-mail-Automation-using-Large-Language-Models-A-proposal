@@ -1,6 +1,15 @@
 import { pool } from "../db.js";
 import { generateKeywords } from "../services/generateKeywords.js";
 
+function normalizeText(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ");
+}
+
 export default async function categoriaRoutes(fastify, opts) {
   // GET /implementacao/:id_implementacao/categorias
   fastify.get("/implementacao/:id_implementacao/categorias", async (request, reply) => {
@@ -74,7 +83,31 @@ export default async function categoriaRoutes(fastify, opts) {
         return reply.code(400).send({ error: "Campo 'nome' é obrigatório" });
       }
 
-      nome = "." + nome;
+      nome = nome.trim();
+
+      if (!nome.startsWith(".")) {
+        nome = "." + nome;
+      }
+
+      const categoriasExistentes = await client.query(
+        `SELECT id_categoria, nome
+        FROM categoria
+        WHERE id_implementacao = $1`,
+        [id_implementacao]
+      );
+
+      const normalizedNewCategory = normalizeText(nome);
+
+      const duplicateCategory = categoriasExistentes.rows.find(
+        row => normalizeText(row.nome) === normalizedNewCategory
+      );
+
+      if (duplicateCategory) {
+        return reply.code(409).send({
+          error: "Esta categoria já existe nesta implementação",
+          categoria: duplicateCategory
+        });
+      }
 
       const textoCompleto = [nome, questao, paraQueServe].filter(Boolean).join(" ");
 
@@ -83,10 +116,10 @@ export default async function categoriaRoutes(fastify, opts) {
       await client.query("BEGIN");
 
       const categoriaResult = await client.query(
-        `INSERT INTO categoria (id_implementacao, nome, questao, para_que_serve)
-        VALUES ($1, $2, $3, $4)
+        `INSERT INTO categoria (id_implementacao, nome)
+        VALUES ($1, $2)
         RETURNING id_categoria`,
-        [id_implementacao, nome, questao, paraQueServe]
+        [id_implementacao, nome]
       );
 
       const categoriaId = categoriaResult.rows[0]?.id_categoria;
@@ -108,6 +141,7 @@ export default async function categoriaRoutes(fastify, opts) {
       reply.code(201).send({
         message: "Categoria criada com sucesso",
         id_categoria: categoriaId,
+        nome,
         keywordsGeradas: keywords
       });
 

@@ -37,12 +37,29 @@ async function authorizedFetch(url, options = {}) {
     },
   });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(errorText || "Erro na comunicação com o backend.");
+  const responseText = await response.text();
+
+  let responseData = null;
+
+  if (responseText) {
+    try {
+      responseData = JSON.parse(responseText);
+    } catch {
+      responseData = null;
+    }
   }
 
-  return response.json();
+  if (!response.ok) {
+    const errorMessage =
+      responseData?.error ||
+      responseData?.message ||
+      responseText ||
+      "Erro na comunicação com o backend.";
+
+    throw new Error(errorMessage);
+  }
+
+  return responseData;
 }
 
 export async function categorizeEmail(emailData) {
@@ -114,6 +131,66 @@ export async function getEmailState(emailData) {
     `${API_BASE_URL}/implementacao/${IMPLEMENTACAO_ID}/estado-email?${params.toString()}`,
     {
       method: "GET",
+    }
+  );
+}
+
+export async function getCategories() {
+  return authorizedFetch(
+    `${API_BASE_URL}/implementacao/${IMPLEMENTACAO_ID}/categorias`,
+    {
+      method: "GET",
+    }
+  );
+}
+
+export async function getCategoryKeywords(categoryId) {
+  try {
+    return await authorizedFetch(
+      `${API_BASE_URL}/implementacao/${IMPLEMENTACAO_ID}/categoria/${categoryId}/keywords`,
+      {
+        method: "GET",
+      }
+    );
+  } catch (error) {
+    if (String(error.message || "").includes("Nenhuma keyword encontrada")) {
+      return [];
+    }
+
+    throw error;
+  }
+}
+
+export async function addCategoryKeyword(categoryId, keyword) {
+  return authorizedFetch(
+    `${API_BASE_URL}/implementacao/${IMPLEMENTACAO_ID}/categoria/${categoryId}/keyword`,
+    {
+      method: "POST",
+      body: JSON.stringify({ keyword }),
+    }
+  );
+}
+
+export async function deleteCategoryKeyword(categoryId, keywordId) {
+  return authorizedFetch(
+    `${API_BASE_URL}/implementacao/${IMPLEMENTACAO_ID}/categoria/${categoryId}/keyword/${keywordId}`,
+    {
+      method: "DELETE",
+      body: JSON.stringify({}),
+    }
+  );
+}
+
+export async function createCategory({ nome, questao, paraQueServe }) {
+  return authorizedFetch(
+    `${API_BASE_URL}/implementacao/${IMPLEMENTACAO_ID}/categoria`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        nome,
+        questao,
+        paraQueServe,
+      }),
     }
   );
 }
