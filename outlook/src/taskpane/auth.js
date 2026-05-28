@@ -5,7 +5,7 @@ import {
 
 import { MSAL_CLIENT_ID } from "./msal.local";
 
-const graphScopes = ["User.Read", "Mail.Read"];
+const graphScopes = ["User.Read", "Mail.Read", "Mail.ReadWrite"];
 
 const urlParams = new URLSearchParams(window.location.search);
 const authMode = urlParams.get("mode") || "login";

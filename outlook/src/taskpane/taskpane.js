@@ -24,7 +24,7 @@ let categoriesCache = [];
 let selectedCategory = null;
 
 const GRAPH_STATE_CACHE_KEY = "ai4ap_graph_email_states";
-const GRAPH_AUTH_CACHE_KEY = "ai4ap_graph_auth_session";
+const GRAPH_AUTH_CACHE_KEY = "ai4ap_graph_auth_session_v2";
 
 Office.onReady((info) => {
   if (info.host === Office.HostType.Outlook) {
@@ -426,7 +426,16 @@ async function handleCategorize() {
     applyCategorizationToCurrentEmail(categoria, keywordsUsadas);
     saveGraphCategorizationState(currentEmailData, categoria, keywordsUsadas);
 
-    setStatus("Email categorizado com sucesso.");
+    try {
+      await applyCategoryAndMarkReadToOpenEmail(categoria);
+      setStatus("Email categorizado, categoria aplicada no Outlook e marcado como lido.");
+    } catch (outlookError) {
+      console.warn("Categoria guardada no backend, mas não aplicada no Outlook:", outlookError);
+      setStatus(
+        `Email categorizado no plugin, mas não foi possível atualizar o Outlook: ${outlookError.message}`,
+        true
+      );
+    }
   } catch (error) {
     console.error("Erro ao categorizar email:", error);
     setStatus(`Erro ao categorizar: ${error.message}`, true);
@@ -914,6 +923,12 @@ async function handleProcessInboxWithGraph() {
 
         saveGraphCategorizationState(emailData, categoria, keywordsUsadas);
 
+        try {
+          await applyCategoryAndMarkReadByGraphId(message.id, categoria);
+        } catch (outlookError) {
+          console.warn("Email categorizado, mas não atualizado no Outlook:", outlookError);
+        }
+
         results.push({
           subject: emailData.assunto,
           from: emailData.remetente,
@@ -992,6 +1007,12 @@ async function handleProcessUnreadInboxWithGraph() {
         const keywordsUsadas = result.keywords_usadas || [];
 
         saveGraphCategorizationState(emailData, categoria, keywordsUsadas);
+
+        try {
+          await applyCategoryAndMarkReadByGraphId(message.id, categoria);
+        } catch (outlookError) {
+          console.warn("Email categorizado, mas não atualizado no Outlook:", outlookError);
+        }
 
         results.push({
           subject: emailData.assunto,
@@ -1403,4 +1424,98 @@ async function handleOpenReplyInOutlook() {
     console.error("Erro ao abrir resposta no Outlook:", error);
     setStatus(`Erro ao abrir resposta: ${error.message}`, true);
   }
+}
+
+function cleanOutlookCategoryName(categoryName) {
+  return String(categoryName || "")
+    .replace(/^\./, "")
+    .trim();
+}
+
+function isValidOutlookCategory(categoryName) {
+  const value = String(categoryName || "").trim();
+
+  return (
+    value &&
+    value !== "Ainda não categorizado" &&
+    value !== "Sem categoria" &&
+    value !== "Erro"
+  );
+}
+
+function getGraphMessageIdFromOfficeItem() {
+  const item = Office.context.mailbox.item;
+
+  if (!item?.itemId) {
+    throw new Error("Não foi possível obter o ID do email aberto.");
+  }
+
+  if (!Office.context.mailbox.convertToRestId) {
+    throw new Error("Este Outlook não suporta conversão do ID para Microsoft Graph.");
+  }
+
+  return Office.context.mailbox.convertToRestId(
+    item.itemId,
+    Office.MailboxEnums.RestVersion.v2_0
+  );
+}
+
+async function applyCategoryAndMarkReadByGraphId(graphMessageId, rawCategory) {
+  const categoryName = cleanOutlookCategoryName(rawCategory);
+
+  if (!isValidOutlookCategory(categoryName)) {
+    throw new Error("Categoria inválida para aplicar no Outlook.");
+  }
+
+  const accessToken = await getGraphAccessToken();
+
+  const getResponse = await fetch(
+    `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(graphMessageId)}?$select=categories,isRead`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
+    }
+  );
+
+  if (!getResponse.ok) {
+    const errorText = await getResponse.text();
+    throw new Error(errorText || "Erro ao obter categorias atuais do email.");
+  }
+
+  const messageData = await getResponse.json();
+  const currentCategories = Array.isArray(messageData.categories)
+    ? messageData.categories
+    : [];
+
+  const mergedCategories = Array.from(
+    new Set([...currentCategories, categoryName])
+  );
+
+  const patchResponse = await fetch(
+    `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(graphMessageId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        categories: mergedCategories,
+        isRead: true,
+      }),
+    }
+  );
+
+  if (!patchResponse.ok) {
+    const errorText = await patchResponse.text();
+    throw new Error(errorText || "Erro ao aplicar categoria e marcar como lido.");
+  }
+}
+
+async function applyCategoryAndMarkReadToOpenEmail(rawCategory) {
+  const graphMessageId = getGraphMessageIdFromOfficeItem();
+  await applyCategoryAndMarkReadByGraphId(graphMessageId, rawCategory);
 }
