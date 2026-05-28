@@ -46,6 +46,9 @@ Office.onReady((info) => {
     const validateResponseButton = document.getElementById("validate-response-button");
     if (validateResponseButton) validateResponseButton.onclick = handleValidateResponse;
 
+    const openReplyButton = document.getElementById("open-reply-button");
+    if (openReplyButton) openReplyButton.onclick = handleOpenReplyInOutlook;
+
     const graphLoginButton = document.getElementById("graph-login-button");
     if (graphLoginButton) graphLoginButton.onclick = handleMicrosoftLogin;
 
@@ -1334,5 +1337,70 @@ async function handleCreateCategory() {
   } catch (error) {
     console.error("Erro ao criar categoria:", error);
     setCategoryStatus(`Erro ao criar categoria: ${error.message}`, true);
+  }
+}
+
+function getResponseContentText() {
+  const responseEl = document.getElementById("response-content");
+  return responseEl?.textContent?.trim() || "";
+}
+
+function cleanGeneratedResponseText(responseText) {
+  return String(responseText || "")
+    .replace(/^Saudação\s*/gim, "")
+    .replace(/^Corpo\s*/gim, "")
+    .replace(/^Assunto\s*/gim, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function buildReplyHtml(responseText) {
+  const cleanedResponse = cleanGeneratedResponseText(responseText);
+  const safeResponse = escapeHtml(cleanedResponse).replace(/\n/g, "<br>");
+
+  return `
+    <div>
+      <p>${safeResponse}</p>
+    </div>
+  `;
+}
+
+async function handleOpenReplyInOutlook() {
+  try {
+    const item = Office.context.mailbox.item;
+
+    if (!item) {
+      throw new Error("Nenhum email está aberto no Outlook.");
+    }
+
+    const responseText = getResponseContentText();
+
+    if (
+      !responseText ||
+      responseText === "Nenhuma resposta carregada." ||
+      responseText === "Resposta ainda sem conteúdo disponível."
+    ) {
+      throw new Error("Ainda não existe uma resposta gerada para abrir no Outlook.");
+    }
+
+    setStatus("A abrir resposta no Outlook...");
+
+    const replyHtml = buildReplyHtml(responseText);
+
+    item.displayReplyForm({
+      htmlBody: replyHtml,
+      callback: (result) => {
+        if (result?.status === Office.AsyncResultStatus.Failed) {
+          console.error("Erro ao abrir resposta no Outlook:", result.error);
+          setStatus(`Erro ao abrir resposta: ${result.error.message}`, true);
+          return;
+        }
+
+        setStatus("Resposta aberta no Outlook. Revê antes de enviar.");
+      },
+    });
+  } catch (error) {
+    console.error("Erro ao abrir resposta no Outlook:", error);
+    setStatus(`Erro ao abrir resposta: ${error.message}`, true);
   }
 }

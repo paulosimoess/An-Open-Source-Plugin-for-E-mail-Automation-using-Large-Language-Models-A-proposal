@@ -88,23 +88,28 @@ export async function requestRagResponse(emailData) {
     {
       method: "POST",
       body: JSON.stringify({
+        message_id,
+        thread_id,
         remetente,
         assunto,
         corpo,
-        message_id,
-        thread_id,
       }),
     }
   );
 }
 
 export async function getLatestResponse(emailData) {
-  return authorizedFetch(
-    `${API_BASE_URL}/implementacao/${IMPLEMENTACAO_ID}/thread/outlook-thread/email/outlook-message/resposta`,
-    {
-      method: "GET",
-    }
-  );
+  const state = await getEmailState(emailData);
+
+  if (state?.resposta) {
+    return state.resposta;
+  }
+
+  return {
+    id_resposta: null,
+    status: "Sem resposta",
+    conteudo: "",
+  };
 }
 
 export async function validateResponse(emailData, respostaId) {
