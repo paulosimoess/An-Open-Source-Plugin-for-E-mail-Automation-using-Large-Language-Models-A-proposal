@@ -61,6 +61,9 @@ Office.onReady((info) => {
     const graphProcessUnreadButton = document.getElementById("graph-process-unread-button");
     if (graphProcessUnreadButton) graphProcessUnreadButton.onclick = handleProcessUnreadInboxWithGraph;
 
+    const filterCategoryButton = document.getElementById("filter-category-button");
+    if (filterCategoryButton) filterCategoryButton.onclick = handleFilterEmailsByCategory;
+
     const loadCategoriesButton = document.getElementById("load-categories-button");
     if (loadCategoriesButton) loadCategoriesButton.onclick = handleLoadCategories;
 
@@ -744,7 +747,7 @@ async function fetchInboxMessagesWithGraph() {
   const endpoint =
     "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages" +
     "?$top=50" +
-    "&$select=id,subject,from,receivedDateTime,bodyPreview,body,conversationId,isRead" +
+    "&$select=id,subject,from,receivedDateTime,bodyPreview,body,conversationId,isRead,categories" +
     "&$orderby=receivedDateTime desc";
 
   const response = await fetch(endpoint, {
@@ -772,7 +775,7 @@ async function fetchUnreadInboxMessagesWithGraph() {
     "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages" +
     "?$top=50" +
     "&$filter=isRead eq false" +
-    "&$select=id,subject,from,receivedDateTime,bodyPreview,body,conversationId,isRead";
+    "&$select=id,subject,from,receivedDateTime,bodyPreview,body,conversationId,isRead,categories";
 
   const response = await fetch(endpoint, {
     method: "GET",
@@ -1130,6 +1133,7 @@ async function handleLoadCategories() {
     selectedCategory = null;
 
     renderCategoriesList(categoriesCache);
+    renderCategoryFilterOptions(categoriesCache);
 
     setCategoryStatus(`Categorias carregadas: ${categoriesCache.length}.`);
   } catch (error) {
@@ -1655,4 +1659,115 @@ async function applyCategoryAndMarkReadByGraphId(graphMessageId, rawCategory) {
 async function applyCategoryAndMarkReadToOpenEmail(rawCategory) {
   const graphMessageId = getGraphMessageIdFromOfficeItem();
   await applyCategoryAndMarkReadByGraphId(graphMessageId, rawCategory);
+}
+
+function renderCategoryFilterOptions(categories) {
+  const select = document.getElementById("category-filter-select");
+  if (!select) return;
+
+  if (!categories.length) {
+    select.innerHTML = `<option value="">Nenhuma categoria disponível</option>`;
+    return;
+  }
+
+  const options = categories
+    .map((category) => {
+      const rawName = category.nome || "";
+      const cleanName = cleanOutlookCategoryName(rawName);
+
+      return `<option value="${escapeHtml(cleanName)}">${escapeHtml(cleanName)}</option>`;
+    })
+    .join("");
+
+  select.innerHTML = options;
+}
+
+function normalizeCategoryForCompare(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function messageHasCategory(message, categoryName) {
+  const expected = normalizeCategoryForCompare(categoryName);
+  const categories = Array.isArray(message.categories) ? message.categories : [];
+
+  return categories.some(
+    (category) => normalizeCategoryForCompare(category) === expected
+  );
+}
+
+async function handleFilterEmailsByCategory() {
+  try {
+    const select = document.getElementById("category-filter-select");
+    const selectedCategory = select?.value?.trim();
+
+    if (!selectedCategory) {
+      throw new Error("Seleciona uma categoria para filtrar.");
+    }
+
+    setGraphStatus(`A procurar emails da categoria "${selectedCategory}"...`);
+    setHtml("category-filter-results", "A carregar emails...");
+
+    let categories = categoriesCache;
+
+    if (!categories.length) {
+      categories = await getCategories();
+      categoriesCache = Array.isArray(categories) ? categories : [];
+      renderCategoryFilterOptions(categoriesCache);
+    }
+
+    const messages = await fetchInboxMessagesWithGraph();
+
+    const filteredMessages = messages.filter((message) =>
+      messageHasCategory(message, selectedCategory)
+    );
+
+    renderFilteredCategoryMessages(filteredMessages, selectedCategory);
+
+    setGraphStatus(
+      `Filtro concluído. Emails encontrados em "${selectedCategory}": ${filteredMessages.length}.`
+    );
+  } catch (error) {
+    console.error("Erro ao filtrar emails por categoria:", error);
+    setGraphStatus(`Erro ao filtrar por categoria: ${error.message}`, true);
+    setHtml("category-filter-results", "Não foi possível filtrar os emails por categoria.");
+  }
+}
+
+function renderFilteredCategoryMessages(messages, categoryName) {
+  if (!messages.length) {
+    setHtml(
+      "category-filter-results",
+      `Nenhum email encontrado com a categoria "${escapeHtml(categoryName)}".`
+    );
+    return;
+  }
+
+  const html = messages
+    .map((message, index) => {
+      const subject = escapeHtml(message.subject || "(Sem assunto)");
+      const fromName = escapeHtml(message.from?.emailAddress?.name || "Remetente desconhecido");
+      const fromAddress = escapeHtml(message.from?.emailAddress?.address || "");
+      const received = escapeHtml(message.receivedDateTime || "");
+      const readState = message.isRead ? "Lido" : "Não lido";
+      const categories = Array.isArray(message.categories)
+        ? message.categories.join(", ")
+        : "-";
+
+      return `
+        <div style="margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #ddd;">
+          <strong>${index + 1}. ${subject}</strong><br>
+          <span><strong>De:</strong> ${fromName} ${fromAddress ? `&lt;${fromAddress}&gt;` : ""}</span><br>
+          <span><strong>Recebido:</strong> ${received}</span><br>
+          <span><strong>Estado:</strong> ${readState}</span><br>
+          <span><strong>Categorias:</strong> ${escapeHtml(categories)}</span>
+        </div>
+      `;
+    })
+    .join("");
+
+  setHtml("category-filter-results", html);
 }
