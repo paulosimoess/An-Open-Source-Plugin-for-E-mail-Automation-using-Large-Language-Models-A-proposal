@@ -743,7 +743,7 @@ async function fetchInboxMessagesWithGraph() {
 
   const endpoint =
     "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages" +
-    "?$top=10" +
+    "?$top=50" +
     "&$select=id,subject,from,receivedDateTime,bodyPreview,body,conversationId,isRead" +
     "&$orderby=receivedDateTime desc";
 
@@ -770,7 +770,7 @@ async function fetchUnreadInboxMessagesWithGraph() {
 
   const endpoint =
     "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages" +
-    "?$top=10" +
+    "?$top=50" +
     "&$filter=isRead eq false" +
     "&$select=id,subject,from,receivedDateTime,bodyPreview,body,conversationId,isRead";
 
