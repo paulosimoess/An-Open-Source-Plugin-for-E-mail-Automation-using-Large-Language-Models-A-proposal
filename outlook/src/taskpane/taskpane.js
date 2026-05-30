@@ -24,7 +24,7 @@ let categoriesCache = [];
 let selectedCategory = null;
 
 const GRAPH_STATE_CACHE_KEY = "ai4ap_graph_email_states";
-const GRAPH_AUTH_CACHE_KEY = "ai4ap_graph_auth_session_v2";
+const GRAPH_AUTH_CACHE_KEY = "ai4ap_graph_auth_session_v3";
 
 Office.onReady((info) => {
   if (info.host === Office.HostType.Outlook) {
@@ -1432,6 +1432,14 @@ function cleanOutlookCategoryName(categoryName) {
     .trim();
 }
 
+function normalizeOutlookCategoryName(categoryName) {
+  return String(categoryName || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
 function isValidOutlookCategory(categoryName) {
   const value = String(categoryName || "").trim();
 
@@ -1460,6 +1468,133 @@ function getGraphMessageIdFromOfficeItem() {
   );
 }
 
+function getColorForOutlookCategory(categoryName) {
+  const normalized = normalizeOutlookCategoryName(categoryName);
+
+  if (normalized.includes("espacos verdes")) {
+    return "preset4";
+  }
+
+  if (normalized.includes("publicidade")) {
+    return "preset1";
+  }
+
+  if (normalized.includes("apoio institucional")) {
+    return "preset5";
+  }
+
+  if (normalized.includes("outro")) {
+    return "preset8";
+  }
+
+  return "preset2";
+}
+
+async function getOutlookMasterCategories(accessToken) {
+  const response = await fetch(
+    "https://graph.microsoft.com/v1.0/me/outlook/masterCategories",
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || "Erro ao obter categorias principais do Outlook.");
+  }
+
+  const data = await response.json();
+  return data.value || [];
+}
+
+async function createOutlookMasterCategory(accessToken, categoryName) {
+  const color = getColorForOutlookCategory(categoryName);
+
+  const response = await fetch(
+    "https://graph.microsoft.com/v1.0/me/outlook/masterCategories",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        displayName: categoryName,
+        color,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+
+    if (
+      response.status === 409 ||
+      errorText.includes("ErrorItemAlreadyExists") ||
+      errorText.includes("already exists")
+    ) {
+      return null;
+    }
+
+    throw new Error(errorText || "Erro ao criar categoria no Outlook.");
+  }
+
+  return response.json();
+}
+
+async function updateOutlookMasterCategoryColor(accessToken, categoryId, categoryName) {
+  const color = getColorForOutlookCategory(categoryName);
+
+  const response = await fetch(
+    `https://graph.microsoft.com/v1.0/me/outlook/masterCategories/${encodeURIComponent(categoryId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        color,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.warn("Não foi possível atualizar a cor da categoria:", errorText);
+  }
+}
+
+async function ensureOutlookMasterCategoryExists(accessToken, categoryName) {
+  const categories = await getOutlookMasterCategories(accessToken);
+  const normalizedCategoryName = normalizeOutlookCategoryName(categoryName);
+
+  const existingCategory = categories.find(
+    (category) =>
+      normalizeOutlookCategoryName(category.displayName) === normalizedCategoryName
+  );
+
+  if (existingCategory) {
+    const currentColor = String(existingCategory.color || "").toLowerCase();
+
+    if (!currentColor || currentColor === "none") {
+      await updateOutlookMasterCategoryColor(
+        accessToken,
+        existingCategory.id,
+        categoryName
+      );
+    }
+
+    return existingCategory;
+  }
+
+  return createOutlookMasterCategory(accessToken, categoryName);
+}
+
 async function applyCategoryAndMarkReadByGraphId(graphMessageId, rawCategory) {
   const categoryName = cleanOutlookCategoryName(rawCategory);
 
@@ -1468,6 +1603,8 @@ async function applyCategoryAndMarkReadByGraphId(graphMessageId, rawCategory) {
   }
 
   const accessToken = await getGraphAccessToken();
+
+  await ensureOutlookMasterCategoryExists(accessToken, categoryName);
 
   const getResponse = await fetch(
     `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(graphMessageId)}?$select=categories,isRead`,
