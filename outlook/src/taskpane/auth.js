@@ -13,7 +13,7 @@ const authMode = urlParams.get("mode") || "login";
 const msalInstance = new PublicClientApplication({
   auth: {
     clientId: MSAL_CLIENT_ID,
-    authority: "https://login.microsoftonline.com/common",
+    authority: "https://login.microsoftonline.com/consumers",
     redirectUri: "https://localhost:3000/auth.html",
   },
   cache: {
