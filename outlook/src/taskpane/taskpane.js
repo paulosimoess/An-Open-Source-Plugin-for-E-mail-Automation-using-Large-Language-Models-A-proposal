@@ -52,6 +52,12 @@ Office.onReady((info) => {
     const graphLoginButton = document.getElementById("graph-login-button");
     if (graphLoginButton) graphLoginButton.onclick = handleMicrosoftLogin;
 
+    try {
+      loadGraphAuthSession();
+    } catch (error) {
+      console.warn("Não foi possível recuperar automaticamente a sessão Microsoft:", error);
+    }
+
     const graphReadInboxButton = document.getElementById("graph-read-inbox-button");
     if (graphReadInboxButton) graphReadInboxButton.onclick = handleReadInboxWithGraph;
 
