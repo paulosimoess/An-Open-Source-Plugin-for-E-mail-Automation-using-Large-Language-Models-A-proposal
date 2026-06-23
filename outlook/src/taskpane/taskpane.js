@@ -820,21 +820,49 @@ async function handleReadInboxWithGraph() {
   }
 }
 
-function getGraphMessageBodyText(message) {
-  const fullBody = message.body?.content || "";
+function stripHtmlToText(value) {
+  const text = String(value || "");
 
-  if (fullBody && fullBody.trim()) {
-    return fullBody.trim();
+  if (!text.trim()) return "";
+
+  const div = document.createElement("div");
+  div.innerHTML = text;
+
+  return (div.textContent || div.innerText || text).trim();
+}
+
+function getGraphMessageBodyText(message) {
+  const fullBody = stripHtmlToText(message.body?.content || "");
+
+  if (fullBody) {
+    return fullBody;
   }
 
-  return message.bodyPreview || "";
+  const preview = stripHtmlToText(message.bodyPreview || "");
+
+  if (preview) {
+    return preview;
+  }
+
+  const subject = stripHtmlToText(message.subject || "");
+
+  if (subject) {
+    return `Corpo não disponível no Microsoft Graph. Assunto do email: ${subject}`;
+  }
+
+  return "Corpo não disponível no Microsoft Graph.";
 }
 
 function convertGraphMessageToBackendEmail(message) {
+  const sender =
+    message.from?.emailAddress?.address ||
+    message.from?.emailAddress?.name ||
+    "remetente-desconhecido";
+
   return {
     message_id: message.id,
     thread_id: message.conversationId || message.id,
-    remetente: message.from?.emailAddress?.address || "",
+    remetente: normalizeEmailAddress(sender) || sender,
     assunto: message.subject || "(Sem assunto)",
     corpo: getGraphMessageBodyText(message),
   };
