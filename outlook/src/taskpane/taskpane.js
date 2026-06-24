@@ -453,6 +453,14 @@ async function handleCategorize() {
   }
 }
 
+async function applyWorkflowCategoryToOpenEmail(categoryName) {
+  try {
+    await applyCategoryAndMarkReadToOpenEmail(categoryName);
+  } catch (error) {
+    console.warn(`Não foi possível aplicar a categoria "${categoryName}" no Outlook:`, error);
+  }
+}
+
 async function handleGenerateResponse() {
   try {
     if (!currentEmailData) {
@@ -470,7 +478,9 @@ async function handleGenerateResponse() {
     setText("response-id", result.job_id || "-");
     setText("response-job-status", result.status || "queued");
 
-    setStatus("Pedido de geração de resposta enviado com sucesso.");
+    await applyWorkflowCategoryToOpenEmail("2. Resposta Gerada");
+
+    setStatus("Pedido de geração de resposta enviado com sucesso e categoria aplicada no Outlook.");
   } catch (error) {
     console.error("Erro ao gerar resposta:", error);
     setStatus(`Erro ao gerar resposta: ${error.message}`, true);
@@ -524,7 +534,9 @@ async function handleValidateResponse() {
     setText("response-job-status", "VALIDADA");
     setText("response-content", result.resposta || "Resposta validada.");
 
-    setStatus("Resposta validada com sucesso.");
+    await applyWorkflowCategoryToOpenEmail("3. Resposta Validada");
+
+    setStatus("Resposta validada com sucesso e categoria aplicada no Outlook.");
   } catch (error) {
     console.error("Erro ao validar resposta:", error);
     setStatus(`Erro ao validar resposta: ${error.message}`, true);
@@ -626,6 +638,29 @@ function updateGraphAccountUi() {
 
   setText("graph-account", graphAccountUsername);
   setGraphStatus("Conta Microsoft autenticada.");
+}
+
+function isGraphAuthenticationError(response, errorText = "") {
+  const text = String(errorText || "");
+
+  return (
+    response?.status === 401 ||
+    text.includes("InvalidAuthenticationToken") ||
+    text.includes("JWT is not well formed") ||
+    text.includes("Compact Serialization Format")
+  );
+}
+
+function handleInvalidGraphSession() {
+  graphAccessToken = null;
+  graphAccountUsername = null;
+
+  clearGraphAuthSession();
+  setText("graph-account", "-");
+  setGraphStatus(
+    "Sessão Microsoft expirada ou inválida. Clique novamente em 'Iniciar sessão Microsoft'.",
+    true
+  );
 }
 
 function openMicrosoftAuthDialog(mode = "login") {
@@ -767,6 +802,11 @@ async function fetchInboxMessagesWithGraph() {
 
   if (!response.ok) {
     const errorText = await response.text();
+
+    if (isGraphAuthenticationError(response, errorText)) {
+      handleInvalidGraphSession();
+    }
+
     throw new Error(errorText || "Erro ao ler emails no Microsoft Graph.");
   }
 
@@ -961,7 +1001,10 @@ async function handleProcessInboxWithGraph() {
         saveGraphCategorizationState(emailData, categoria, keywordsUsadas);
 
         try {
-          await applyCategoryAndMarkReadByGraphId(message.id, categoria);
+          await applyCategoryAndMarkReadByGraphId(message.id, [
+            "1. Categorizado",
+            categoria,
+          ]);
         } catch (outlookError) {
           console.warn("Email categorizado, mas não atualizado no Outlook:", outlookError);
         }
@@ -1046,7 +1089,10 @@ async function handleProcessUnreadInboxWithGraph() {
         saveGraphCategorizationState(emailData, categoria, keywordsUsadas);
 
         try {
-          await applyCategoryAndMarkReadByGraphId(message.id, categoria);
+          await applyCategoryAndMarkReadByGraphId(message.id, [
+            "1. Categorizado",
+            categoria,
+          ]);
         } catch (outlookError) {
           console.warn("Email categorizado, mas não atualizado no Outlook:", outlookError);
         }
@@ -1444,6 +1490,7 @@ async function handleOpenReplyInOutlook() {
 
     setStatus("A abrir resposta no Outlook...");
 
+    const graphMessageId = getGraphMessageIdFromOfficeItem();
     const replyHtml = buildReplyHtml(responseText);
 
     item.displayReplyForm({
@@ -1455,13 +1502,76 @@ async function handleOpenReplyInOutlook() {
           return;
         }
 
-        setStatus("Resposta aberta no Outlook. Revê antes de enviar.");
+        applyCategoryAndMarkReadByGraphId(graphMessageId, "4. Respondido")
+          .then(() => {
+            setStatus("Resposta aberta no Outlook e email marcado como respondido.");
+          })
+          .catch((error) => {
+            console.warn("Resposta aberta, mas não foi possível aplicar '4. Respondido':", error);
+            setStatus("Resposta aberta no Outlook. Revê antes de enviar.");
+          });
       },
     });
   } catch (error) {
     console.error("Erro ao abrir resposta no Outlook:", error);
     setStatus(`Erro ao abrir resposta: ${error.message}`, true);
   }
+}
+
+const WORKFLOW_CATEGORY_ORDER = [
+  "1. Categorizado",
+  "2. Resposta Gerada",
+  "3. Resposta Validada",
+  "4. Respondido",
+];
+
+function getWorkflowCategoryIndex(categoryName) {
+  const normalized = normalizeOutlookCategoryName(categoryName);
+
+  return WORKFLOW_CATEGORY_ORDER.findIndex(
+    (workflowCategory) =>
+      normalizeOutlookCategoryName(workflowCategory) === normalized
+  );
+}
+
+function orderOutlookCategories(categories) {
+  const uniqueMap = new Map();
+
+  categories
+    .map((category) => cleanOutlookCategoryName(category))
+    .filter((category) => isValidOutlookCategory(category))
+    .forEach((category) => {
+      const key = normalizeOutlookCategoryName(category);
+
+      if (!uniqueMap.has(key)) {
+        uniqueMap.set(key, category);
+      }
+    });
+
+  const uniqueCategories = Array.from(uniqueMap.values());
+
+  const thematicCategories = uniqueCategories.filter(
+    (category) => getWorkflowCategoryIndex(category) === -1
+  );
+
+  const workflowCategories = WORKFLOW_CATEGORY_ORDER.filter((workflowCategory) =>
+    uniqueCategories.some(
+      (category) =>
+        normalizeOutlookCategoryName(category) ===
+        normalizeOutlookCategoryName(workflowCategory)
+    )
+  );
+
+  /*
+    No Outlook Web, as categorias aparecem visualmente pela ordem inversa
+    à ordem gravada via Graph. Por isso gravamos invertido para que a UI mostre:
+    Categoria temática, 1. Categorizado, 2. Resposta Gerada,
+    3. Resposta Validada, 4. Respondido.
+  */
+  return [
+    ...workflowCategories.slice().reverse(),
+    ...thematicCategories.slice().reverse(),
+  ];
 }
 
 function cleanOutlookCategoryName(categoryName) {
@@ -1509,23 +1619,45 @@ function getGraphMessageIdFromOfficeItem() {
 function getColorForOutlookCategory(categoryName) {
   const normalized = normalizeOutlookCategoryName(categoryName);
 
-  if (normalized.includes("espacos verdes")) {
-    return "preset4";
+  // Categorias de fluxo do processamento
+  if (normalized === normalizeOutlookCategoryName("1. Categorizado")) {
+    return "preset5";
+  }
+
+  if (normalized === normalizeOutlookCategoryName("2. Resposta Gerada")) {
+    return "preset6";
+  }
+
+  if (normalized === normalizeOutlookCategoryName("3. Resposta Validada")) {
+    return "preset20";
+  }
+
+  if (normalized === normalizeOutlookCategoryName("4. Respondido")) {
+    return "preset21";
+  }
+
+  // Categorias temáticas
+  if (normalized.includes("iluminacao publica")) {
+    return "preset2";
   }
 
   if (normalized.includes("publicidade")) {
-    return "preset1";
+    return "preset23";
+  }
+
+  if (normalized.includes("espacos verdes")) {
+    return "preset7";
   }
 
   if (normalized.includes("apoio institucional")) {
-    return "preset5";
+    return "preset1";
   }
 
   if (normalized.includes("outro")) {
     return "preset8";
   }
 
-  return "preset2";
+  return "preset13";
 }
 
 async function getOutlookMasterCategories(accessToken) {
@@ -1607,9 +1739,18 @@ async function updateOutlookMasterCategoryColor(accessToken, categoryId, categor
   }
 }
 
+async function syncWorkflowCategoryColors(accessToken) {
+  for (const categoryName of WORKFLOW_CATEGORY_ORDER) {
+    await ensureOutlookMasterCategoryExists(accessToken, categoryName);
+  }
+}
+
 async function ensureOutlookMasterCategoryExists(accessToken, categoryName) {
+  const cleanCategoryName = cleanOutlookCategoryName(categoryName);
+  const expectedColor = getColorForOutlookCategory(cleanCategoryName).toLowerCase();
+
   const categories = await getOutlookMasterCategories(accessToken);
-  const normalizedCategoryName = normalizeOutlookCategoryName(categoryName);
+  const normalizedCategoryName = normalizeOutlookCategoryName(cleanCategoryName);
 
   const existingCategory = categories.find(
     (category) =>
@@ -1619,30 +1760,37 @@ async function ensureOutlookMasterCategoryExists(accessToken, categoryName) {
   if (existingCategory) {
     const currentColor = String(existingCategory.color || "").toLowerCase();
 
-    if (!currentColor || currentColor === "none") {
+    if (currentColor !== expectedColor) {
       await updateOutlookMasterCategoryColor(
         accessToken,
         existingCategory.id,
-        categoryName
+        cleanCategoryName
       );
     }
 
     return existingCategory;
   }
 
-  return createOutlookMasterCategory(accessToken, categoryName);
+  return createOutlookMasterCategory(accessToken, cleanCategoryName);
 }
 
 async function applyCategoryAndMarkReadByGraphId(graphMessageId, rawCategory) {
-  const categoryName = cleanOutlookCategoryName(rawCategory);
+  const rawCategories = Array.isArray(rawCategory) ? rawCategory : [rawCategory];
 
-  if (!isValidOutlookCategory(categoryName)) {
+  const categoryNames = rawCategories
+    .map((category) => cleanOutlookCategoryName(category))
+    .filter((category) => isValidOutlookCategory(category));
+
+  if (!categoryNames.length) {
     throw new Error("Categoria inválida para aplicar no Outlook.");
   }
 
   const accessToken = await getGraphAccessToken();
+  await syncWorkflowCategoryColors(accessToken);
 
-  await ensureOutlookMasterCategoryExists(accessToken, categoryName);
+  for (const categoryName of categoryNames) {
+    await ensureOutlookMasterCategoryExists(accessToken, categoryName);
+  }
 
   const getResponse = await fetch(
     `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(graphMessageId)}?$select=categories,isRead`,
@@ -1657,6 +1805,11 @@ async function applyCategoryAndMarkReadByGraphId(graphMessageId, rawCategory) {
 
   if (!getResponse.ok) {
     const errorText = await getResponse.text();
+
+    if (isGraphAuthenticationError(getResponse, errorText)) {
+      handleInvalidGraphSession();
+    }
+
     throw new Error(errorText || "Erro ao obter categorias atuais do email.");
   }
 
@@ -1665,9 +1818,10 @@ async function applyCategoryAndMarkReadByGraphId(graphMessageId, rawCategory) {
     ? messageData.categories
     : [];
 
-  const mergedCategories = Array.from(
-    new Set([...currentCategories, categoryName])
-  );
+  const mergedCategories = orderOutlookCategories([
+    ...currentCategories,
+    ...categoryNames,
+  ]);
 
   const patchResponse = await fetch(
     `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(graphMessageId)}`,
@@ -1686,13 +1840,22 @@ async function applyCategoryAndMarkReadByGraphId(graphMessageId, rawCategory) {
 
   if (!patchResponse.ok) {
     const errorText = await patchResponse.text();
+
+    if (isGraphAuthenticationError(patchResponse, errorText)) {
+      handleInvalidGraphSession();
+    }
+
     throw new Error(errorText || "Erro ao aplicar categoria e marcar como lido.");
   }
 }
 
 async function applyCategoryAndMarkReadToOpenEmail(rawCategory) {
   const graphMessageId = getGraphMessageIdFromOfficeItem();
-  await applyCategoryAndMarkReadByGraphId(graphMessageId, rawCategory);
+
+  await applyCategoryAndMarkReadByGraphId(graphMessageId, [
+    "1. Categorizado",
+    rawCategory,
+  ]);
 }
 
 function renderCategoryFilterOptions(categories) {
