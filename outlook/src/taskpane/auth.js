@@ -9,6 +9,29 @@ const graphScopes = ["User.Read", "Mail.Read", "Mail.ReadWrite", "MailboxSetting
 
 const urlParams = new URLSearchParams(window.location.search);
 const authMode = urlParams.get("mode") || "login";
+const loginHint = (urlParams.get("login_hint") || "").trim().toLowerCase();
+
+function normalizeAccountEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function getPreferredAccount(accounts) {
+  if (!Array.isArray(accounts) || !accounts.length) {
+    return null;
+  }
+
+  if (!loginHint) {
+    return accounts[0];
+  }
+
+  return (
+    accounts.find(
+      (account) =>
+        normalizeAccountEmail(account.username) === loginHint ||
+        normalizeAccountEmail(account.name) === loginHint
+    ) || accounts[0]
+  );
+}
 
 const msalInstance = new PublicClientApplication({
   auth: {
@@ -64,7 +87,8 @@ async function startAuth() {
 
     if (accounts.length > 0) {
       try {
-        await sendTokenFromAccount(accounts[0]);
+        const preferredAccount = getPreferredAccount(accounts);
+        await sendTokenFromAccount(preferredAccount);
         return;
       } catch (error) {
         if (
@@ -94,6 +118,7 @@ async function startAuth() {
     await msalInstance.loginRedirect({
       scopes: graphScopes,
       prompt: "select_account",
+      loginHint: loginHint || undefined,
     });
   } catch (error) {
     sendMessageToParent({

@@ -58,6 +58,8 @@ Office.onReady((info) => {
       console.warn("Não foi possível recuperar automaticamente a sessão Microsoft:", error);
     }
 
+    //tryOfficeSsoTokenOnly({ interactive: true });
+
     const graphReadInboxButton = document.getElementById("graph-read-inbox-button");
     if (graphReadInboxButton) graphReadInboxButton.onclick = handleReadInboxWithGraph;
 
@@ -651,6 +653,18 @@ function isGraphAuthenticationError(response, errorText = "") {
   );
 }
 
+function getCurrentMailboxEmailAddress() {
+  return (
+    Office.context?.mailbox?.userProfile?.emailAddress ||
+    Office.context?.mailbox?.userProfile?.displayName ||
+    ""
+  );
+}
+
+function getCurrentMailboxLoginHint() {
+  return String(getCurrentMailboxEmailAddress() || "").trim().toLowerCase();
+}
+
 function handleInvalidGraphSession() {
   graphAccessToken = null;
   graphAccountUsername = null;
@@ -665,7 +679,10 @@ function handleInvalidGraphSession() {
 
 function openMicrosoftAuthDialog(mode = "login") {
   return new Promise((resolve, reject) => {
-    const url = `https://localhost:3000/auth.html?mode=${mode}`;
+    const loginHint = encodeURIComponent(getCurrentMailboxLoginHint());
+    const url = `https://localhost:3000/auth.html?mode=${mode}${
+      loginHint ? `&login_hint=${loginHint}` : ""
+    }`;
 
     Office.context.ui.displayDialogAsync(
       url,
@@ -782,6 +799,56 @@ async function getGraphAccessToken() {
   return graphAccessToken;
 }
 
+async function tryOfficeSsoTokenOnly({ interactive = false } = {}) {
+  try {
+    const officeAuth =
+      window.OfficeRuntime?.auth ||
+      window.Office?.auth;
+
+    if (!officeAuth?.getAccessToken) {
+      console.warn("Office SSO não está disponível neste cliente Outlook.");
+      return null;
+    }
+
+    const ssoToken = await officeAuth.getAccessToken({
+      allowSignInPrompt: interactive,
+      allowConsentPrompt: interactive,
+    });
+
+    if (!ssoToken || String(ssoToken).split(".").length < 3) {
+      throw new Error("O token SSO devolvido pelo Office não tem formato JWT válido.");
+    }
+
+    console.log("Office SSO token obtido com sucesso:", {
+      interactive,
+      tokenPreview: `${ssoToken.substring(0, 25)}...`,
+    });
+
+    setGraphStatus(
+      interactive
+        ? "Office SSO obtido com sucesso em modo interativo."
+        : "Office SSO obtido automaticamente com sucesso."
+    );
+
+    return ssoToken;
+  } catch (error) {
+    console.warn("Office SSO indisponível. Será usado fallback MSAL/localStorage:", {
+      interactive,
+      name: error?.name,
+      code: error?.code,
+      message: error?.message,
+      debugInfo: error?.debugInfo,
+      error,
+    });
+
+    setGraphStatus(
+      `Office SSO indisponível neste contexto. Fallback MSAL/localStorage ativo. Código: ${error?.code || "sem código"}`
+    );
+
+    return null;
+  }
+}
+
 async function fetchInboxMessagesWithGraph() {
   const accessToken = await getGraphAccessToken();
 
@@ -834,6 +901,11 @@ async function fetchUnreadInboxMessagesWithGraph() {
 
   if (!response.ok) {
     const errorText = await response.text();
+
+    if (isGraphAuthenticationError(response, errorText)) {
+      handleInvalidGraphSession();
+    }
+
     throw new Error(errorText || "Erro ao ler emails não lidos no Microsoft Graph.");
   }
 
