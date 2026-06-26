@@ -1282,12 +1282,28 @@ async function handleLoadCategories() {
     const categories = await getCategories();
 
     categoriesCache = Array.isArray(categories) ? categories : [];
-    selectedCategory = null;
 
     renderCategoriesList(categoriesCache);
     renderCategoryFilterOptions(categoriesCache);
 
-    setCategoryStatus(`Categorias carregadas: ${categoriesCache.length}.`);
+    let labelsCreatedCount = 0;
+
+    try {
+      labelsCreatedCount = await ensureOutlookLabelFolders(categoriesCache);
+    } catch (labelError) {
+      console.warn("Categorias carregadas, mas não foi possível criar labels no Outlook:", labelError);
+
+      setCategoryStatus(
+        `Categorias carregadas: ${categoriesCache.length}. Não foi possível criar as labels no Outlook: ${labelError.message}`,
+        true
+      );
+
+      return;
+    }
+
+    setCategoryStatus(
+      `Categorias carregadas: ${categoriesCache.length}. Labels Outlook garantidas: ${labelsCreatedCount}.`
+    );
   } catch (error) {
     console.error("Erro ao carregar categorias:", error);
     setCategoryStatus(`Erro ao carregar categorias: ${error.message}`, true);
@@ -1753,6 +1769,361 @@ async function getOutlookMasterCategories(accessToken) {
   return data.value || [];
 }
 
+const OUTLOOK_LABELS_ROOT_FOLDER = "AI4APGovernance Labels";
+
+function normalizeOutlookFolderName(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function getWorkflowLabelNames() {
+  return [
+    "1. Categorizado",
+    "2. Resposta Gerada",
+    "3. Resposta Validada",
+    "4. Respondido",
+  ];
+}
+
+function getCategoryLabelNames(categories) {
+  const categoryNames = Array.isArray(categories)
+    ? categories
+        .map((category) =>
+          cleanOutlookCategoryName(category.nome || category.name || "")
+        )
+        .filter((name) => isValidOutlookCategory(name))
+    : [];
+
+  const allLabels = [...categoryNames, ...getWorkflowLabelNames()];
+  const uniqueMap = new Map();
+
+  allLabels.forEach((label) => {
+    const key = normalizeOutlookFolderName(label);
+
+    if (!uniqueMap.has(key)) {
+      uniqueMap.set(key, label);
+    }
+  });
+
+  return Array.from(uniqueMap.values());
+}
+
+async function getOutlookMailFolders(accessToken, parentFolderId = null) {
+  const url = parentFolderId
+    ? `https://graph.microsoft.com/v1.0/me/mailFolders/${encodeURIComponent(
+        parentFolderId
+      )}/childFolders?$top=100&includeHiddenFolders=true`
+    : "https://graph.microsoft.com/v1.0/me/mailFolders?$top=100&includeHiddenFolders=true";
+
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+
+    if (isGraphAuthenticationError(response, errorText)) {
+      handleInvalidGraphSession();
+    }
+
+    throw new Error(errorText || "Erro ao obter pastas do Outlook.");
+  }
+
+  const data = await response.json();
+  return data.value || [];
+}
+
+async function createOutlookMailFolder(
+  accessToken,
+  displayName,
+  parentFolderId = null
+) {
+  const url = parentFolderId
+    ? `https://graph.microsoft.com/v1.0/me/mailFolders/${encodeURIComponent(
+        parentFolderId
+      )}/childFolders`
+    : "https://graph.microsoft.com/v1.0/me/mailFolders";
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      displayName,
+      isHidden: false,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+
+    if (
+      response.status === 409 ||
+      errorText.includes("ErrorFolderExists") ||
+      errorText.includes("already exists")
+    ) {
+      return null;
+    }
+
+    if (isGraphAuthenticationError(response, errorText)) {
+      handleInvalidGraphSession();
+    }
+
+    throw new Error(errorText || `Erro ao criar pasta "${displayName}" no Outlook.`);
+  }
+
+  return response.json();
+}
+
+async function ensureOutlookMailFolderExists(
+  accessToken,
+  displayName,
+  parentFolderId = null
+) {
+  const folders = await getOutlookMailFolders(accessToken, parentFolderId);
+  const normalizedDisplayName = normalizeOutlookFolderName(displayName);
+
+  const existingFolder = folders.find(
+    (folder) =>
+      normalizeOutlookFolderName(folder.displayName) === normalizedDisplayName
+  );
+
+  if (existingFolder) {
+    return existingFolder;
+  }
+
+  const createdFolder = await createOutlookMailFolder(
+    accessToken,
+    displayName,
+    parentFolderId
+  );
+
+  if (createdFolder?.id) {
+    return createdFolder;
+  }
+
+  const refreshedFolders = await getOutlookMailFolders(accessToken, parentFolderId);
+
+  return refreshedFolders.find(
+    (folder) =>
+      normalizeOutlookFolderName(folder.displayName) === normalizedDisplayName
+  );
+}
+
+async function ensureOutlookLabelFolders(categories) {
+  const accessToken = await getGraphAccessToken();
+
+  const rootFolder = await ensureOutlookMailFolderExists(
+    accessToken,
+    OUTLOOK_LABELS_ROOT_FOLDER
+  );
+
+  if (!rootFolder?.id) {
+    throw new Error("Não foi possível criar ou obter a pasta principal das labels.");
+  }
+
+  const labelNames = getCategoryLabelNames(categories);
+
+  for (const labelName of labelNames) {
+    await ensureOutlookMailFolderExists(accessToken, labelName, rootFolder.id);
+  }
+
+  return labelNames.length;
+}
+
+async function getGraphMessageSummary(accessToken, graphMessageId) {
+  const response = await fetch(
+    `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(
+      graphMessageId
+    )}?$select=id,internetMessageId,conversationId,subject,receivedDateTime,parentFolderId`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+
+    if (isGraphAuthenticationError(response, errorText)) {
+      handleInvalidGraphSession();
+    }
+
+    throw new Error(errorText || "Erro ao obter dados do email para label.");
+  }
+
+  return response.json();
+}
+
+async function getMessagesFromLabelFolder(accessToken, folderId) {
+  const response = await fetch(
+    `https://graph.microsoft.com/v1.0/me/mailFolders/${encodeURIComponent(
+      folderId
+    )}/messages?$top=100&$select=id,internetMessageId,conversationId,subject,receivedDateTime`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+
+    if (isGraphAuthenticationError(response, errorText)) {
+      handleInvalidGraphSession();
+    }
+
+    throw new Error(errorText || "Erro ao verificar emails já existentes na label.");
+  }
+
+  const data = await response.json();
+  return data.value || [];
+}
+
+function isSameMessageForLabel(existingMessage, originalMessage) {
+  if (
+    existingMessage.internetMessageId &&
+    originalMessage.internetMessageId &&
+    existingMessage.internetMessageId === originalMessage.internetMessageId
+  ) {
+    return true;
+  }
+
+  return (
+    existingMessage.conversationId &&
+    originalMessage.conversationId &&
+    existingMessage.conversationId === originalMessage.conversationId &&
+    String(existingMessage.subject || "").trim() ===
+      String(originalMessage.subject || "").trim()
+  );
+}
+
+async function copyGraphMessageToFolder(accessToken, graphMessageId, destinationFolderId) {
+  const response = await fetch(
+    `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(
+      graphMessageId
+    )}/copy`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        destinationId: destinationFolderId,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+
+    if (isGraphAuthenticationError(response, errorText)) {
+      handleInvalidGraphSession();
+    }
+
+    throw new Error(errorText || "Erro ao copiar email para pasta-label.");
+  }
+
+  return response.json();
+}
+
+async function copyMessageToOutlookLabelFolder(accessToken, graphMessageId, labelName) {
+  const cleanLabelName = cleanOutlookCategoryName(labelName);
+
+  if (!isValidOutlookCategory(cleanLabelName)) {
+    return false;
+  }
+
+  const rootFolder = await ensureOutlookMailFolderExists(
+    accessToken,
+    OUTLOOK_LABELS_ROOT_FOLDER
+  );
+
+  if (!rootFolder?.id) {
+    throw new Error("Não foi possível obter a pasta principal das labels.");
+  }
+
+  const labelFolder = await ensureOutlookMailFolderExists(
+    accessToken,
+    cleanLabelName,
+    rootFolder.id
+  );
+
+  if (!labelFolder?.id) {
+    throw new Error(`Não foi possível obter a pasta-label "${cleanLabelName}".`);
+  }
+
+  const originalMessage = await getGraphMessageSummary(accessToken, graphMessageId);
+  const existingMessages = await getMessagesFromLabelFolder(accessToken, labelFolder.id);
+
+  const alreadyCopied = existingMessages.some((message) =>
+    isSameMessageForLabel(message, originalMessage)
+  );
+
+  if (alreadyCopied) {
+    console.log(`Email já existia na pasta-label "${cleanLabelName}".`);
+    return false;
+  }
+
+  await copyGraphMessageToFolder(accessToken, graphMessageId, labelFolder.id);
+
+  console.log(`Email copiado para a pasta-label "${cleanLabelName}".`);
+  return true;
+}
+
+async function copyMessageToOutlookLabelFolders(graphMessageId, rawCategories) {
+  const accessToken = await getGraphAccessToken();
+  const rawCategoryList = Array.isArray(rawCategories)
+    ? rawCategories
+    : [rawCategories];
+
+  const labelNames = rawCategoryList
+    .map((category) => cleanOutlookCategoryName(category))
+    .filter((category) => isValidOutlookCategory(category));
+
+  const uniqueLabels = Array.from(
+    new Map(
+      labelNames.map((label) => [normalizeOutlookCategoryName(label), label])
+    ).values()
+  );
+
+  let copiedCount = 0;
+
+  for (const labelName of uniqueLabels) {
+    try {
+      const copied = await copyMessageToOutlookLabelFolder(
+        accessToken,
+        graphMessageId,
+        labelName
+      );
+
+      if (copied) {
+        copiedCount += 1;
+      }
+    } catch (error) {
+      console.warn(`Não foi possível copiar email para a label "${labelName}":`, error);
+    }
+  }
+
+  return copiedCount;
+}
+
 async function createOutlookMasterCategory(accessToken, categoryName) {
   const color = getColorForOutlookCategory(categoryName);
 
@@ -1918,6 +2289,12 @@ async function applyCategoryAndMarkReadByGraphId(graphMessageId, rawCategory) {
     }
 
     throw new Error(errorText || "Erro ao aplicar categoria e marcar como lido.");
+  }
+
+  try {
+    await copyMessageToOutlookLabelFolders(graphMessageId, categoryNames);
+  } catch (labelCopyError) {
+    console.warn("Categorias aplicadas, mas não foi possível copiar para as pastas-label:", labelCopyError);
   }
 }
 
