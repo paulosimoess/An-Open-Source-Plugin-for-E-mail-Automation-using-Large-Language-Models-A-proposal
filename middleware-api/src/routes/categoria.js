@@ -259,6 +259,13 @@ export default async function categoriaRoutes(fastify, opts) {
             );
         }
 
+        // 5. Apagar keywords associadas à categoria
+        await pool.query(
+            `DELETE FROM keyword
+            WHERE id_categoria = $1`,
+            [id_categoria]
+        );
+
         // 5. Apagar categoria (cascade para keywords se existir FK)
         const result = await pool.query(
             `DELETE FROM categoria

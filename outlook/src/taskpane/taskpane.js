@@ -11,6 +11,8 @@ import {
   addCategoryKeyword,
   deleteCategoryKeyword,
   createCategory,
+  updateCategory,
+  deleteCategory,
 } from "./api";
 
 import { MSAL_CLIENT_ID } from "./msal.local";
@@ -22,6 +24,7 @@ let currentEmailData = null;
 let lastResponseId = null;
 let categoriesCache = [];
 let selectedCategory = null;
+let pendingDeleteCategoryId = null;
 
 const GRAPH_STATE_CACHE_KEY = "ai4ap_graph_email_states";
 const GRAPH_AUTH_CACHE_KEY = "ai4ap_graph_auth_session_v3";
@@ -1311,6 +1314,15 @@ async function handleLoadCategories() {
   }
 }
 
+function isProtectedOtherCategory(category) {
+  const cleanName = String(category?.nome || "")
+    .trim()
+    .replace(/^\./, "")
+    .toLowerCase();
+
+  return String(category?.id_categoria) === "1" || cleanName === "outro";
+}
+
 function renderCategoriesList(categories) {
   if (!categories.length) {
     setHtml("categories-list", "Nenhuma categoria encontrada.");
@@ -1321,16 +1333,59 @@ function renderCategoriesList(categories) {
     .map((category) => {
       const id = escapeHtml(category.id_categoria);
       const name = escapeHtml(category.nome || "Categoria sem nome");
+      const editableName = escapeHtml(
+        normalizeCategoryNameForEditing(category.nome || "")
+      );
       const description = escapeHtml(category.para_que_serve || category.questao || "");
+      const protectedCategory = isProtectedOtherCategory(category);
 
       return `
         <div class="category-item" data-category-id="${id}">
-          <div class="category-name">${name}</div>
-          ${
-            description
-              ? `<div class="category-meta">${description}</div>`
-              : `<div class="category-meta">ID: ${id}</div>`
-          }
+          <div class="category-content">
+            <div class="category-view">
+              <div class="category-name">${name}</div>
+              ${
+                description
+                  ? `<div class="category-meta">${description}</div>`
+                  : `<div class="category-meta">ID: ${id}</div>`
+              }
+            </div>
+
+            ${
+              protectedCategory
+                ? ""
+                : `
+                  <div class="category-edit-form ui-hidden" data-category-id="${id}">
+                    <input
+                      class="text-input inline-category-name-input"
+                      type="text"
+                      value="${editableName}"
+                      data-category-id="${id}"
+                    />
+
+                    <div class="category-actions">
+                      <button type="button" class="category-action-button category-save-button" data-category-id="${id}">
+                        Guardar
+                      </button>
+
+                      <button type="button" class="category-action-button category-cancel-button" data-category-id="${id}">
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="category-actions category-main-actions">
+                    <button type="button" class="category-action-button category-edit-button" data-category-id="${id}">
+                      Editar
+                    </button>
+
+                    <button type="button" class="category-action-button category-delete-button" data-category-id="${id}">
+                      Remover
+                    </button>
+                  </div>
+                `
+            }
+          </div>
         </div>
       `;
     })
@@ -1338,12 +1393,63 @@ function renderCategoriesList(categories) {
 
   setHtml("categories-list", html);
 
-  const categoryItems = document.querySelectorAll("#categories-list .category-item");
+  document.querySelectorAll("#categories-list .category-item").forEach((item) => {
+    item.onclick = (event) => {
+      if (event.target.closest("button") || event.target.closest("input")) {
+        return;
+      }
 
-  categoryItems.forEach((item) => {
-    item.onclick = () => {
       const categoryId = item.getAttribute("data-category-id");
       handleSelectCategory(categoryId);
+    };
+  });
+
+  document.querySelectorAll("#categories-list .category-edit-button").forEach((button) => {
+    button.onclick = async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const categoryId = button.getAttribute("data-category-id");
+      await handleSelectCategory(categoryId);
+      showInlineCategoryEditor(categoryId);
+    };
+  });
+
+  document.querySelectorAll("#categories-list .category-cancel-button").forEach((button) => {
+    button.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      hideAllInlineCategoryEditors();
+      setCategoryStatus("Edição cancelada.");
+    };
+  });
+
+  document.querySelectorAll("#categories-list .category-save-button").forEach((button) => {
+    button.onclick = async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const categoryId = button.getAttribute("data-category-id");
+      await handleSaveInlineCategoryEdit(categoryId);
+    };
+  });
+
+  document.querySelectorAll("#categories-list .category-delete-button").forEach((button) => {
+    button.onclick = async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const categoryId = button.getAttribute("data-category-id");
+
+      if (
+        !selectedCategory ||
+        String(selectedCategory.id_categoria) !== String(categoryId)
+      ) {
+        await handleSelectCategory(categoryId);
+      }
+
+      await handleDeleteCategory();
     };
   });
 }
@@ -1369,6 +1475,10 @@ async function handleSelectCategory(categoryId) {
     if (selectedElement) {
       selectedElement.classList.add("selected");
     }
+
+    pendingDeleteCategoryId = null;
+    resetCategoryDeleteButtons();
+    hideAllInlineCategoryEditors();
 
     setText("selected-category", selectedCategory.nome || "Categoria sem nome");
     setHtml("keywords-list", "A carregar palavras-chave...");
@@ -1420,6 +1530,207 @@ function renderKeywordsList(keywords) {
     .join("");
 
   setHtml("keywords-list", html);
+}
+
+function normalizeCategoryNameForEditing(categoryName) {
+  return String(categoryName || "")
+    .trim()
+    .replace(/^\./, "");
+}
+
+async function handleUpdateCategory() {
+  try {
+    if (!selectedCategory) {
+      throw new Error("Seleciona primeiro uma categoria.");
+    }
+
+    const input = document.getElementById("edit-category-name-input");
+    const newName = input?.value?.trim();
+
+    if (!newName) {
+      throw new Error("Indica o novo nome da categoria.");
+    }
+
+    setCategoryStatus(`A atualizar categoria "${selectedCategory.nome}"...`);
+
+    const result = await updateCategory(selectedCategory.id_categoria, newName);
+    const updatedCategory = result.categoria || result;
+
+    await handleLoadCategories();
+
+    selectedCategory = updatedCategory;
+
+    setText("selected-category", updatedCategory.nome || `.${newName}`);
+
+    if (input) {
+      input.value = normalizeCategoryNameForEditing(updatedCategory.nome || newName);
+    }
+
+    setCategoryStatus(`Categoria atualizada com sucesso: ${updatedCategory.nome || newName}`);
+  } catch (error) {
+    console.error("Erro ao atualizar categoria:", error);
+    setCategoryStatus(`Erro ao atualizar categoria: ${error.message}`, true);
+  }
+}
+
+function resetCategoryDeleteButtons() {
+  document.querySelectorAll("#categories-list .category-delete-button").forEach((button) => {
+    button.textContent = "Remover";
+  });
+
+  const mainDeleteButtonLabel = document
+    .getElementById("delete-category-button")
+    ?.querySelector(".ms-Button-label");
+
+  if (mainDeleteButtonLabel) {
+    mainDeleteButtonLabel.textContent = "Apagar categoria selecionada";
+  }
+}
+
+function setCategoryDeleteConfirmState(categoryId) {
+  resetCategoryDeleteButtons();
+
+  const inlineDeleteButton = document.querySelector(
+    `#categories-list .category-delete-button[data-category-id="${categoryId}"]`
+  );
+
+  if (inlineDeleteButton) {
+    inlineDeleteButton.textContent = "Confirmar";
+  }
+
+  const mainDeleteButtonLabel = document
+    .getElementById("delete-category-button")
+    ?.querySelector(".ms-Button-label");
+
+  if (mainDeleteButtonLabel) {
+    mainDeleteButtonLabel.textContent = "Confirmar eliminação";
+  }
+}
+
+function hideAllInlineCategoryEditors() {
+  document.querySelectorAll("#categories-list .category-edit-form").forEach((form) => {
+    form.classList.add("ui-hidden");
+  });
+
+  document.querySelectorAll("#categories-list .category-view").forEach((view) => {
+    view.classList.remove("ui-hidden");
+  });
+
+  document.querySelectorAll("#categories-list .category-main-actions").forEach((actions) => {
+    actions.classList.remove("ui-hidden");
+  });
+}
+
+function showInlineCategoryEditor(categoryId) {
+  hideAllInlineCategoryEditors();
+
+  const item = document.querySelector(
+    `#categories-list .category-item[data-category-id="${categoryId}"]`
+  );
+
+  if (!item) return;
+
+  const view = item.querySelector(".category-view");
+  const form = item.querySelector(".category-edit-form");
+  const input = item.querySelector(".inline-category-name-input");
+  const mainActions = item.querySelector(".category-main-actions");
+
+  if (view) view.classList.add("ui-hidden");
+  if (form) form.classList.remove("ui-hidden");
+  if (mainActions) mainActions.classList.add("ui-hidden");
+
+  if (input) {
+    input.focus();
+    input.select();
+  }
+
+  setCategoryStatus("Edita o nome da categoria e clica em Guardar.");
+}
+
+async function handleSaveInlineCategoryEdit(categoryId) {
+  try {
+    const category = categoriesCache.find(
+      (item) => String(item.id_categoria) === String(categoryId)
+    );
+
+    if (!category) {
+      throw new Error("Categoria não encontrada.");
+    }
+
+    const input = document.querySelector(
+      `#categories-list .inline-category-name-input[data-category-id="${categoryId}"]`
+    );
+
+    const newName = input?.value?.trim();
+
+    if (!newName) {
+      throw new Error("Indica o novo nome da categoria.");
+    }
+
+    setCategoryStatus(`A atualizar categoria "${category.nome}"...`);
+
+    await updateCategory(categoryId, newName);
+
+    await handleLoadCategories();
+
+    setCategoryStatus(`Categoria atualizada com sucesso: ${newName}`);
+  } catch (error) {
+    console.error("Erro ao atualizar categoria:", error);
+    setCategoryStatus(`Erro ao atualizar categoria: ${error.message}`, true);
+  }
+}
+
+async function handleDeleteCategory() {
+  try {
+    if (!selectedCategory) {
+      throw new Error("Seleciona primeiro uma categoria.");
+    }
+
+    const categoryId = selectedCategory.id_categoria;
+    const categoryName = selectedCategory.nome || "categoria selecionada";
+    const deleteButton = document.getElementById("delete-category-button");
+    const deleteButtonLabel = deleteButton?.querySelector(".ms-Button-label");
+
+    if (pendingDeleteCategoryId !== categoryId) {
+      pendingDeleteCategoryId = categoryId;
+
+      setCategoryDeleteConfirmState(categoryId);
+
+      setCategoryStatus(
+        `Clica novamente em Confirmar para eliminar a categoria "${categoryName}".`
+      );
+
+      return;
+    }
+
+    setCategoryStatus(`A apagar categoria "${categoryName}"...`);
+
+    await deleteCategory(categoryId);
+
+    pendingDeleteCategoryId = null;
+    selectedCategory = null;
+
+    resetCategoryDeleteButtons();
+
+    const input = document.getElementById("edit-category-name-input");
+    if (input) {
+      input.value = "";
+    }
+
+    if (deleteButtonLabel) {
+      deleteButtonLabel.textContent = "Apagar categoria selecionada";
+    }
+
+    setText("selected-category", "Nenhuma categoria selecionada.");
+    setHtml("keywords-list", "Nenhuma palavra-chave carregada.");
+
+    await handleLoadCategories();
+
+    setCategoryStatus(`Categoria "${categoryName}" apagada com sucesso.`);
+  } catch (error) {
+    console.error("Erro ao apagar categoria:", error);
+    setCategoryStatus(`Erro ao apagar categoria: ${error.message}`, true);
+  }
 }
 
 async function handleAddKeyword() {

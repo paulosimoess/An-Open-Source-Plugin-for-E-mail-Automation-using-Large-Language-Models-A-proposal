@@ -199,3 +199,23 @@ export async function createCategory({ nome, questao, paraQueServe }) {
     }
   );
 }
+
+export async function updateCategory(categoryId, nome) {
+  return authorizedFetch(
+    `${API_BASE_URL}/implementacao/${IMPLEMENTACAO_ID}/categoria/${categoryId}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ nome }),
+    }
+  );
+}
+
+export async function deleteCategory(categoryId) {
+  return authorizedFetch(
+    `${API_BASE_URL}/implementacao/${IMPLEMENTACAO_ID}/categoria/${categoryId}`,
+    {
+      method: "DELETE",
+      body: JSON.stringify({}),
+    }
+  );
+}

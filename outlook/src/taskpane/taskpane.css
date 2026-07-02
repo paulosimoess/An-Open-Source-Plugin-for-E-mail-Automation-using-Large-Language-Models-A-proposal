@@ -447,17 +447,43 @@ body {
 }
 
 .keyword-remove {
-  border: 1px solid #d13438;
-  color: #d13438;
+  border: 1px solid #f3c1c6;
   background: #ffffff;
+  color: #a4262c;
   border-radius: 8px;
-  padding: 5px 8px;
-  cursor: pointer;
+  padding: 6px 10px;
   font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+
+  min-width: 82px;
+  width: auto;
+  white-space: nowrap;
+  text-align: center;
 }
 
 .keyword-remove:hover {
-  background: #fde7e9;
+  background: #fff5f5;
+  border-color: #d13438;
+  color: #d13438;
+}
+
+.keyword-remove:focus {
+  outline: 2px solid #0078d4;
+  outline-offset: 2px;
+}
+
+.keyword-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.keyword-text {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
 }
 
 .category-item.selected {
@@ -507,5 +533,104 @@ body {
 }
 
 .dev-hidden {
+  display: none !important;
+}
+.danger-zone {
+  border: 1px solid #f3c1c6;
+  background: #fff5f5;
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.danger-help {
+  margin: 0 0 10px 0;
+  color: #605e5c;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.danger-button {
+  background: #d13438 !important;
+  border-color: #d13438 !important;
+}
+
+.danger-button:hover {
+  background: #a4262c !important;
+  border-color: #a4262c !important;
+}
+
+.danger-button .ms-Button-label {
+  color: #ffffff !important;
+}
+
+.category-content {
+  min-width: 0;
+}
+
+.category-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.category-action-button {
+  border: 1px solid #d0d7de;
+  background: #ffffff;
+  color: #323130;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.category-action-button:hover {
+  background: #f3f8ff;
+  border-color: #0078d4;
+  color: #0078d4;
+}
+
+.category-delete-button {
+  border-color: #f3c1c6;
+  color: #a4262c;
+}
+
+.category-delete-button:hover {
+  background: #fff5f5;
+  border-color: #d13438;
+  color: #d13438;
+}
+
+.category-delete-button:focus,
+.category-edit-button:focus {
+  outline: 2px solid #0078d4;
+  outline-offset: 2px;
+}
+
+.category-edit-form {
+  margin-top: 10px;
+}
+
+.inline-category-name-input {
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.category-save-button {
+  border-color: #0078d4;
+  color: #0078d4;
+}
+
+.category-save-button:hover {
+  background: #f3f8ff;
+  border-color: #005a9e;
+  color: #005a9e;
+}
+
+.category-cancel-button {
+  color: #605e5c;
+}
+
+.ui-hidden {
   display: none !important;
 }
