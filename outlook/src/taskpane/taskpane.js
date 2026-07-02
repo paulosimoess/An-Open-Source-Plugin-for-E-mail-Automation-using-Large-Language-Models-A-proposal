@@ -16,6 +16,7 @@ import {
 } from "./api";
 
 import { MSAL_CLIENT_ID } from "./msal.local";
+import { acquireNaaGraphSession, isNaaSupported } from "./authNaa";
 
 let graphAccessToken = null;
 let graphAccountUsername = null;
@@ -55,11 +56,15 @@ Office.onReady((info) => {
     const graphLoginButton = document.getElementById("graph-login-button");
     if (graphLoginButton) graphLoginButton.onclick = handleMicrosoftLogin;
 
-    try {
-      loadGraphAuthSession();
-    } catch (error) {
-      console.warn("Não foi possível recuperar automaticamente a sessão Microsoft:", error);
-    }
+    /*
+      Botão opcional para testes de NAA/SSO.
+      Se não existir no taskpane.html, não acontece nada.
+      Isto permite testar SSO numa branch experimental sem mexer na UI atual.
+    */
+    const graphNaaLoginButton = document.getElementById("graph-naa-login-button");
+    if (graphNaaLoginButton) graphNaaLoginButton.onclick = handleMicrosoftNaaLoginOnly;
+
+    tryRestoreMicrosoftSessionAutomatically();
 
     //tryOfficeSsoTokenOnly({ interactive: true });
 
@@ -98,9 +103,7 @@ Office.onReady((info) => {
 
     run();
 
-    if (!loadGraphAuthSession()) {
-      updateGraphAccountUi();
-    }
+    tryRestoreMicrosoftSessionAutomatically();
   }
 });
 
@@ -777,16 +780,101 @@ function openMicrosoftAuthDialog(mode = "login") {
   });
 }
 
+async function handleMicrosoftNaaLoginOnly(options = {}) {
+  const { silent = false } = options;
+
+  try {
+    validateMsalConfig();
+
+    if (!silent) {
+      setGraphStatus("A testar autenticação Microsoft por SSO/NAA...");
+    }
+
+    const supported = isNaaSupported();
+
+    if (!supported) {
+      throw new Error("Nested App Authentication não está suportado neste cliente Outlook.");
+    }
+
+    const session = await acquireNaaGraphSession(undefined, {
+      interactive: !silent,
+    });
+
+    graphAccessToken = session.accessToken;
+    graphAccountUsername = session.username || "Conta autenticada";
+
+    saveGraphAuthSession(graphAccessToken, graphAccountUsername);
+    updateGraphAccountUi();
+
+    setGraphStatus(
+      silent
+        ? `Sessão Microsoft ligada automaticamente por SSO/NAA: ${graphAccountUsername}.`
+        : `SSO/NAA Microsoft concluído com sucesso: ${graphAccountUsername}.`
+    );
+
+    return true;
+  } catch (error) {
+    console.warn("SSO/NAA Microsoft indisponível:", error);
+
+    if (!silent) {
+      setGraphStatus(
+        `SSO/NAA indisponível neste contexto. Mantém-se o fluxo Microsoft atual. Detalhe: ${error.message}`
+      );
+    }
+
+    return false;
+  }
+}
+
 async function handleMicrosoftLogin() {
   try {
     validateMsalConfig();
 
-    setGraphStatus("A abrir autenticação Microsoft...");
+    setGraphStatus("A tentar autenticação Microsoft por SSO/NAA...");
+
+    const naaWorked = await handleMicrosoftNaaLoginOnly();
+
+    if (naaWorked) {
+      return;
+    }
+
+    setGraphStatus("A abrir autenticação Microsoft atual como fallback...");
 
     await openMicrosoftAuthDialog("login");
   } catch (error) {
     console.error("Erro no login Microsoft:", error);
     setGraphStatus(`Erro no login Microsoft: ${error.message}`, true);
+  }
+}
+
+async function tryRestoreMicrosoftSessionAutomatically() {
+  try {
+    if (graphAccessToken) {
+      return true;
+    }
+
+    const restoredFromCache = loadGraphAuthSession();
+
+    if (restoredFromCache) {
+      return true;
+    }
+
+    setGraphStatus("A tentar recuperar sessão Microsoft automaticamente...");
+
+    const restoredWithNaa = await handleMicrosoftNaaLoginOnly({
+      silent: true,
+    });
+
+    if (restoredWithNaa) {
+      return true;
+    }
+
+    updateGraphAccountUi();
+    return false;
+  } catch (error) {
+    console.warn("Não foi possível recuperar sessão automaticamente:", error);
+    updateGraphAccountUi();
+    return false;
   }
 }
 
