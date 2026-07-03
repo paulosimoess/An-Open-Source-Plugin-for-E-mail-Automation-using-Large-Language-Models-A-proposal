@@ -28,63 +28,64 @@
                     <span class="summary-icon">📨</span>
                     Caixa de Entrada Outlook
                 </span>
-                <small>Sincronização, categorização em lote e filtros</small>
+                <small>Processamento incremental e categorização</small>
             </summary>
 
-            <div class="details-content">
+            <div class="details-content inbox-clean-panel">
                 <p id="graph-status" class="status-pill">Sessão Microsoft não iniciada.</p>
 
-                <div role="button" id="graph-login-button" class="ms-Button ms-Button--primary">
-                    <span class="ms-Button-label">Iniciar sessão Microsoft</span>
+                <div class="account-summary">
+                    <span class="account-label">Conta Microsoft</span>
+                    <strong id="graph-account">-</strong>
                 </div>
 
-                <div class="button-grid">
-                    <div role="button" id="graph-read-inbox-button" class="ms-Button ms-Button--primary">
-                        <span class="ms-Button-label">Sincronizar emails</span>
+                <div class="main-flow-card">
+                    <p class="flow-label">Fluxo principal</p>
+
+                    <div role="button" id="graph-delta-sync-button" class="ms-Button ms-Button--primary main-action-button">
+                        <span class="ms-Button-label">Processar emails novos</span>
                     </div>
 
-                    <div role="button" id="graph-delta-sync-button" class="ms-Button ms-Button--primary">
-                        <span class="ms-Button-label">Sincronizar alterações</span>
-                    </div>
+                    <p class="flow-help">
+                        Usa sincronização incremental para detetar emails novos ou alterados e enviá-los para categorização.
+                    </p>
+                </div>
 
-                    <div role="button" id="graph-process-inbox-button" class="ms-Button ms-Button--primary">
-                        <span class="ms-Button-label">Categorizar emails carregados</span>
-                    </div>
-
-                    <div role="button" id="graph-process-unread-button" class="ms-Button ms-Button--primary">
-                        <span class="ms-Button-label">Categorizar novos emails</span>
+                <div class="result-card">
+                    <p class="section-title">Resultado do processamento</p>
+                    <div id="graph-process-results" class="result-box">
+                        Nenhum email processado.
                     </div>
                 </div>
 
-                <div class="field">
-                    <div class="field-label">Conta Microsoft ligada</div>
-                    <div id="graph-account" class="field-value">-</div>
-                </div>
+                <details class="fallback-section">
+                    <summary>Opções avançadas</summary>
 
-                <div class="field">
-                    <div class="field-label">Emails sincronizados</div>
-                    <div id="graph-inbox-list" class="field-value field-body">Nenhum email carregado.</div>
-                </div>
+                    <div class="button-grid fallback-buttons">
+                        <div role="button" id="graph-login-button" class="ms-Button ms-Button--primary secondary-action-button">
+                            <span class="ms-Button-label">Reautenticar Microsoft</span>
+                        </div>
 
-                <div class="field">
-                    <div class="field-label">Resultado da categorização automática</div>
-                    <div id="graph-process-results" class="field-value field-body">Nenhum email processado.</div>
-                </div>
+                        <div role="button" id="graph-read-inbox-button" class="ms-Button ms-Button--primary secondary-action-button">
+                            <span class="ms-Button-label">Carregar Inbox completa</span>
+                        </div>
 
-                <div class="field">
-                    <div class="field-label">Filtrar emails por categoria</div>
+                        <div role="button" id="graph-process-inbox-button" class="ms-Button ms-Button--primary secondary-action-button">
+                            <span class="ms-Button-label">Categorizar lista carregada</span>
+                        </div>
 
-                    <select id="category-filter-select" class="text-input">
-                        <option value="">Carrega primeiro as categorias</option>
-                    </select>
-
-                    <div role="button" id="filter-category-button" class="ms-Button ms-Button--primary">
-                        <span class="ms-Button-label">Ver emails desta categoria</span>
+                        <div role="button" id="graph-process-unread-button" class="ms-Button ms-Button--primary secondary-action-button">
+                            <span class="ms-Button-label">Categorizar emails não lidos</span>
+                        </div>
                     </div>
 
-                    <div id="category-filter-results" class="field-value field-body">
-                        Nenhuma categoria filtrada.
-                    </div>
+                    <p class="flow-help">
+                        Opções mantidas para testes, fallback e demonstração manual.
+                    </p>
+                </details>
+
+                <div class="hidden-debug-section">
+                    <div id="graph-inbox-list">Nenhum email carregado.</div>
                 </div>
             </div>
         </details>
@@ -232,6 +233,22 @@
                         <span class="ms-Button-label">Criar categoria</span>
                     </div>
                 </div>
+
+                <details class="fallback-section">
+                    <summary>Filtrar emails por categoria</summary>
+
+                    <select id="category-filter-select" class="text-input">
+                        <option value="">Carrega primeiro as categorias</option>
+                    </select>
+
+                    <div role="button" id="filter-category-button" class="ms-Button ms-Button--primary secondary-action-button">
+                        <span class="ms-Button-label">Ver emails desta categoria</span>
+                    </div>
+
+                    <div id="category-filter-results" class="result-box">
+                        Nenhuma categoria filtrada.
+                    </div>
+                </details>
             </div>
         </details>
 

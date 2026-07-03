@@ -1477,8 +1477,8 @@ async function handleProcessUnreadInboxWithGraph() {
 
 async function handleSyncInboxDeltaManual() {
   try {
-    setGraphStatus("A sincronizar alterações da Inbox através de Delta Query...");
-    setHtml("graph-process-results", "A verificar alterações desde a última sincronização...");
+    setGraphStatus("A procurar emails novos ou alterados através de Delta Query...");
+    setHtml("graph-process-results", "A verificar emails novos ou alterados desde a última sincronização...");
 
     if (!graphAccessToken) {
       try {
@@ -1499,11 +1499,11 @@ async function handleSyncInboxDeltaManual() {
     if (!deltaResult.hadStoredDeltaLink) {
       setHtml(
         "graph-process-results",
-        "Sincronização incremental inicial preparada. Esta primeira execução apenas guarda o estado atual da Inbox. Envie ou receba um novo email e clique novamente em “Sincronizar alterações”."
+        "Sincronização incremental inicial preparada. Esta primeira execução apenas guarda o estado atual da Inbox. Envie ou receba um novo email e clique novamente em “Processar novos/alterados”."
       );
 
       setGraphStatus(
-        "Delta Query inicial configurada. A partir da próxima execução serão processados apenas emails novos ou alterados."
+        "Delta Query inicial configurada. A partir da próxima execução, o botão “Processar novos/alterados” tratará apenas emails novos ou alterados."
       );
 
       return;

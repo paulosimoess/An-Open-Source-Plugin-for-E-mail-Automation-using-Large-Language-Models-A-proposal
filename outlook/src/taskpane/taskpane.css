@@ -338,7 +338,7 @@ body {
   display: none;
 }
 
-.details-card summary::after {
+.details-card > summary::after {
   content: "Abrir";
   align-self: flex-start;
   margin-top: 6px;
@@ -351,7 +351,7 @@ body {
   border-bottom: 1px solid #e5e7eb;
 }
 
-.details-card[open] summary::after {
+.details-card[open] > summary::after {
   content: "Fechar";
 }
 
@@ -633,4 +633,182 @@ body {
 
 .ui-hidden {
   display: none !important;
+}
+
+.main-flow-card {
+  margin-top: 14px;
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid #d0e7ff;
+  border-radius: 12px;
+  background: #f3f9ff;
+}
+
+.flow-label {
+  margin: 0 0 8px 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #005a9e;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.flow-help {
+  margin: 8px 0 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #444;
+}
+
+.main-action-button {
+  width: 100%;
+}
+
+.fallback-section {
+  margin-top: 12px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid #e1e1e1;
+  border-radius: 12px;
+  background: #fafafa;
+}
+
+.fallback-section summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.fallback-section summary::after {
+  content: "Abrir";
+  color: #0078d4;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.fallback-section[open] summary::after {
+  content: "Fechar";
+}
+
+.fallback-buttons {
+  margin-top: 12px;
+}
+
+
+.inbox-clean-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.account-summary {
+  padding: 10px 12px;
+  border: 1px solid #e1e5ea;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.account-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  color: #666;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.account-summary strong {
+  font-size: 13px;
+  color: #222;
+  word-break: break-word;
+}
+
+.main-flow-card {
+  margin-top: 0;
+  margin-bottom: 0;
+  padding: 14px;
+  border: 1px solid #cfe5ff;
+  border-radius: 12px;
+  background: #f5faff;
+}
+
+.flow-label {
+  margin: 0 0 8px 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: #005a9e;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.flow-help {
+  margin: 8px 0 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #555;
+}
+
+.main-action-button,
+.secondary-action-button {
+  width: 100%;
+}
+
+.result-card {
+  padding: 12px;
+  border: 1px solid #e1e5ea;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.section-title {
+  margin: 0 0 8px 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #222;
+}
+
+.result-box,
+#graph-process-results.result-box,
+#category-filter-results.result-box {
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid #e1e5ea;
+  border-radius: 10px;
+  background: #fafafa;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.fallback-section {
+  margin-top: 0;
+  margin-bottom: 0;
+  padding: 12px;
+  border: 1px solid #e1e5ea;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.fallback-section summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  color: #333;
+  margin-bottom: 10px;
+}
+
+.fallback-section:not([open]) summary {
+  margin-bottom: 0;
+}
+
+.fallback-buttons {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hidden-debug-section {
+  display: none;
 }
