@@ -29,6 +29,7 @@ let pendingDeleteCategoryId = null;
 
 const GRAPH_STATE_CACHE_KEY = "ai4ap_graph_email_states";
 const GRAPH_AUTH_CACHE_KEY = "ai4ap_graph_auth_session_v3";
+const GRAPH_INBOX_DELTA_LINK_KEY_PREFIX = "ai4ap_graph_inbox_delta_link_v1";
 
 Office.onReady((info) => {
   if (info.host === Office.HostType.Outlook) {
@@ -76,6 +77,9 @@ Office.onReady((info) => {
 
     const graphProcessUnreadButton = document.getElementById("graph-process-unread-button");
     if (graphProcessUnreadButton) graphProcessUnreadButton.onclick = handleProcessUnreadInboxWithGraph;
+
+    const graphDeltaSyncButton = document.getElementById("graph-delta-sync-button");
+    if (graphDeltaSyncButton) graphDeltaSyncButton.onclick = handleSyncInboxDeltaManual;
 
     const filterCategoryButton = document.getElementById("filter-category-button");
     if (filterCategoryButton) filterCategoryButton.onclick = handleFilterEmailsByCategory;
@@ -637,6 +641,41 @@ function loadGraphAuthSession() {
   }
 }
 
+function getInboxDeltaLinkCacheKey() {
+  const accountKey = normalizeCacheText(
+    graphAccountUsername || getCurrentMailboxLoginHint() || "default"
+  );
+
+  return `${GRAPH_INBOX_DELTA_LINK_KEY_PREFIX}:${accountKey}`;
+}
+
+function getStoredInboxDeltaLink() {
+  try {
+    return localStorage.getItem(getInboxDeltaLinkCacheKey()) || "";
+  } catch (error) {
+    console.warn("Erro ao ler deltaLink da Inbox:", error);
+    return "";
+  }
+}
+
+function saveStoredInboxDeltaLink(deltaLink) {
+  try {
+    if (!deltaLink) return;
+
+    localStorage.setItem(getInboxDeltaLinkCacheKey(), deltaLink);
+  } catch (error) {
+    console.warn("Erro ao guardar deltaLink da Inbox:", error);
+  }
+}
+
+function clearStoredInboxDeltaLink() {
+  try {
+    localStorage.removeItem(getInboxDeltaLinkCacheKey());
+  } catch (error) {
+    console.warn("Erro ao limpar deltaLink da Inbox:", error);
+  }
+}
+
 function updateGraphAccountUi() {
   if (!graphAccountUsername) {
     setText("graph-account", "-");
@@ -972,6 +1011,79 @@ async function fetchInboxMessagesWithGraph() {
   return data.value || [];
 }
 
+async function fetchInboxDeltaChangesWithGraph() {
+  const accessToken = await getGraphAccessToken();
+  const storedDeltaLink = getStoredInboxDeltaLink();
+  const hadStoredDeltaLink = Boolean(storedDeltaLink);
+
+  let endpoint =
+    storedDeltaLink ||
+    "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta" +
+      "?$select=id,subject,from,receivedDateTime,bodyPreview,body,conversationId,isRead,categories";
+
+  const changedMessages = [];
+  const removedMessages = [];
+
+  let pageCount = 0;
+  const maxPages = 20;
+
+  while (endpoint && pageCount < maxPages) {
+    pageCount += 1;
+
+    const response = await fetch(endpoint, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+        Prefer: 'outlook.body-content-type="text", odata.maxpagesize=25',
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+
+      if (response.status === 410) {
+        clearStoredInboxDeltaLink();
+        throw new Error(
+          "A sincronização incremental expirou. Clique novamente em “Sincronizar alterações” para preparar uma nova sincronização."
+        );
+      }
+
+      if (isGraphAuthenticationError(response, errorText)) {
+        handleInvalidGraphSession();
+      }
+
+      throw new Error(errorText || "Erro ao executar Delta Query da Inbox.");
+    }
+
+    const data = await response.json();
+    const values = Array.isArray(data.value) ? data.value : [];
+
+    values.forEach((message) => {
+      if (message["@removed"]) {
+        removedMessages.push(message);
+      } else {
+        changedMessages.push(message);
+      }
+    });
+
+    if (data["@odata.deltaLink"]) {
+      saveStoredInboxDeltaLink(data["@odata.deltaLink"]);
+
+      return {
+        hadStoredDeltaLink,
+        changedMessages,
+        removedMessages,
+        deltaLink: data["@odata.deltaLink"],
+      };
+    }
+
+    endpoint = data["@odata.nextLink"] || null;
+  }
+
+  throw new Error("A Delta Query não devolveu deltaLink dentro do limite de páginas.");
+}
+
 async function fetchUnreadInboxMessagesWithGraph() {
   const accessToken = await getGraphAccessToken();
 
@@ -1206,6 +1318,75 @@ async function handleProcessInboxWithGraph() {
   }
 }
 
+async function processGraphMessagesFromDelta(messages) {
+  const results = [];
+
+  for (const message of messages) {
+    const emailData = convertGraphMessageToBackendEmail(message);
+
+    try {
+      const existingCategorization = await getExistingCategorization(emailData);
+
+      if (existingCategorization) {
+        results.push({
+          subject: emailData.assunto,
+          from: emailData.remetente,
+          status: "Já processado",
+          categoria: existingCategorization.categoria,
+          keywords: existingCategorization.keywords,
+        });
+
+        renderGraphProcessingResults(results);
+        continue;
+      }
+
+      const result = await categorizeEmail(emailData);
+      const categoria = result.categoria || "Sem categoria";
+      const keywordsUsadas = result.keywords_usadas || [];
+
+      saveGraphCategorizationState(emailData, categoria, keywordsUsadas);
+
+      try {
+        await applyCategoryAndMarkReadByGraphId(message.id, [
+          "1. Categorizado",
+          categoria,
+        ]);
+      } catch (outlookError) {
+        console.warn(
+          "Email categorizado pela Delta Query, mas não atualizado no Outlook:",
+          outlookError
+        );
+      }
+
+      results.push({
+        subject: emailData.assunto,
+        from: emailData.remetente,
+        status: "Categorizado por Delta Query",
+        categoria,
+        keywords: keywordsUsadas.length
+          ? keywordsUsadas.join(", ")
+          : "Nenhuma keyword usada",
+      });
+
+      renderGraphProcessingResults(results);
+    } catch (error) {
+      console.error("Erro ao processar email da Delta Query:", error);
+
+      results.push({
+        subject: emailData.assunto,
+        from: emailData.remetente,
+        status: "Erro",
+        categoria: "-",
+        keywords: error.message || "Erro desconhecido",
+      });
+
+      renderGraphProcessingResults(results);
+    }
+  }
+
+  return results;
+}
+
 async function handleProcessUnreadInboxWithGraph() {
   try {
     setGraphStatus("A procurar emails novos/não lidos...");
@@ -1291,6 +1472,84 @@ async function handleProcessUnreadInboxWithGraph() {
     console.error("Erro ao processar emails não lidos:", error);
     setGraphStatus(`Erro ao processar emails novos: ${error.message}`, true);
     setHtml("graph-process-results", "Não foi possível processar os emails novos/não lidos.");
+  }
+}
+
+async function handleSyncInboxDeltaManual() {
+  try {
+    setGraphStatus("A sincronizar alterações da Inbox através de Delta Query...");
+    setHtml("graph-process-results", "A verificar alterações desde a última sincronização...");
+
+    if (!graphAccessToken) {
+      try {
+        await tryRestoreMicrosoftSessionAutomatically();
+      } catch (restoreError) {
+        console.warn("Não foi possível recuperar sessão automaticamente:", restoreError);
+      }
+    }
+
+    if (!graphAccessToken) {
+      throw new Error(
+        "Ainda não existe sessão Microsoft. Inicie sessão antes de sincronizar alterações."
+      );
+    }
+
+    const deltaResult = await fetchInboxDeltaChangesWithGraph();
+
+    if (!deltaResult.hadStoredDeltaLink) {
+      setHtml(
+        "graph-process-results",
+        "Sincronização incremental inicial preparada. Esta primeira execução apenas guarda o estado atual da Inbox. Envie ou receba um novo email e clique novamente em “Sincronizar alterações”."
+      );
+
+      setGraphStatus(
+        "Delta Query inicial configurada. A partir da próxima execução serão processados apenas emails novos ou alterados."
+      );
+
+      return;
+    }
+
+    const changedMessages = deltaResult.changedMessages || [];
+    const removedMessages = deltaResult.removedMessages || [];
+
+    if (!changedMessages.length) {
+      setHtml(
+        "graph-process-results",
+        removedMessages.length
+          ? `Não existem emails novos/alterados para processar. Alterações removidas detetadas: ${removedMessages.length}.`
+          : "Não existem emails novos ou alterados desde a última sincronização."
+      );
+
+      setGraphStatus(
+        removedMessages.length
+          ? `Sincronização concluída. Sem emails novos para categorizar. Removidos detetados: ${removedMessages.length}.`
+          : "Sincronização concluída. Nenhum email novo ou alterado encontrado."
+      );
+
+      return;
+    }
+
+    lastGraphMessages = changedMessages;
+    renderGraphInboxMessages(changedMessages);
+
+    setHtml(
+      "graph-process-results",
+      `Foram encontrados ${changedMessages.length} email(s) novo(s)/alterado(s). A enviar para categorização...`
+    );
+
+    const results = await processGraphMessagesFromDelta(changedMessages);
+
+    setGraphStatus(
+      `Sincronização incremental concluída. Emails analisados: ${changedMessages.length}. Resultados: ${results.length}.`
+    );
+  } catch (error) {
+    console.error("Erro na sincronização incremental manual:", error);
+
+    setGraphStatus(`Erro na sincronização incremental: ${error.message}`, true);
+    setHtml(
+      "graph-process-results",
+      "Não foi possível concluir a sincronização incremental."
+    );
   }
 }
 
