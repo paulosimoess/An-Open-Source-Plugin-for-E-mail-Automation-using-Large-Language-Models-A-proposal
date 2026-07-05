@@ -236,7 +236,9 @@ body {
 #graph-process-inbox-button,
 #graph-process-unread-button,
 #filter-category-button,
-#load-categories-button,
+#load-categories-button {
+  margin-bottom: 18px;
+}
 #add-keyword-button,
 #create-category-button {
   display: flex;

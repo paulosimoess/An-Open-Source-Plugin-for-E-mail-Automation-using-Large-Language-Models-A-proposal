@@ -1229,6 +1229,28 @@ async function getExistingCategorization(emailData) {
   }
 }
 
+async function ensureProcessedEmailVisibleInOutlook(message, existingCategorization) {
+  if (!message?.id || !existingCategorization?.categoria) {
+    return false;
+  }
+
+  try {
+    await applyCategoryAndMarkReadByGraphId(message.id, [
+      "1. Categorizado",
+      existingCategorization.categoria,
+    ]);
+
+    return true;
+  } catch (error) {
+    console.warn(
+      "Email já processado no backend, mas não foi possível garantir categoria no Outlook:",
+      error
+    );
+
+    return false;
+  }
+}
+
 async function handleProcessInboxWithGraph() {
   try {
     setGraphStatus("A processar emails da Inbox...");
@@ -1257,10 +1279,17 @@ async function handleProcessInboxWithGraph() {
         const existingCategorization = await getExistingCategorization(emailData);
 
         if (existingCategorization) {
+          const outlookUpdated = await ensureProcessedEmailVisibleInOutlook(
+            message,
+            existingCategorization
+          );
+
           results.push({
             subject: emailData.assunto,
             from: emailData.remetente,
-            status: "Já processado",
+            status: outlookUpdated
+              ? "Já processado / categoria garantida no Outlook"
+              : "Já processado / validação visual não confirmada",
             categoria: existingCategorization.categoria,
             keywords: existingCategorization.keywords,
           });
@@ -1321,17 +1350,25 @@ async function handleProcessInboxWithGraph() {
 async function processGraphMessagesFromDelta(messages) {
   const results = [];
 
-  for (const message of messages) {
+  for (const rawMessage of messages) {
+    const message = await ensureCompleteGraphMessage(rawMessage);
     const emailData = convertGraphMessageToBackendEmail(message);
 
     try {
       const existingCategorization = await getExistingCategorization(emailData);
 
       if (existingCategorization) {
+        const outlookUpdated = await ensureProcessedEmailVisibleInOutlook(
+          message,
+          existingCategorization
+        );
+
         results.push({
           subject: emailData.assunto,
           from: emailData.remetente,
-          status: "Já processado",
+          status: outlookUpdated
+            ? "Já processado / categoria garantida no Outlook"
+            : "Já processado / validação visual não confirmada",
           categoria: existingCategorization.categoria,
           keywords: existingCategorization.keywords,
         });
@@ -1414,10 +1451,17 @@ async function handleProcessUnreadInboxWithGraph() {
         const existingCategorization = await getExistingCategorization(emailData);
 
         if (existingCategorization) {
+          const outlookUpdated = await ensureProcessedEmailVisibleInOutlook(
+            message,
+            existingCategorization
+          );
+
           results.push({
             subject: emailData.assunto,
             from: emailData.remetente,
-            status: "Já processado",
+            status: outlookUpdated
+              ? "Já processado / categoria garantida no Outlook"
+              : "Já processado / validação visual não confirmada",
             categoria: existingCategorization.categoria,
             keywords: existingCategorization.keywords,
           });
@@ -1612,6 +1656,50 @@ function renderGraphInboxMessages(messages) {
     .join("");
 
   setHtml("graph-inbox-list", html);
+}
+
+async function fetchFullGraphMessageById(messageId) {
+  const accessToken = await getGraphAccessToken();
+
+  const response = await fetch(
+    `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(
+      messageId
+    )}?$select=id,subject,from,receivedDateTime,bodyPreview,body,conversationId,isRead,categories`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+        Prefer: 'outlook.body-content-type="text"',
+      },
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || "Erro ao obter email completo no Microsoft Graph.");
+  }
+
+  return response.json();
+}
+
+async function ensureCompleteGraphMessage(message) {
+  const hasSubject = Boolean(message?.subject);
+  const hasSender = Boolean(message?.from?.emailAddress?.address);
+  const hasBody =
+    Boolean(message?.body?.content) || Boolean(message?.bodyPreview);
+
+  if (hasSubject && hasSender && hasBody && message?.conversationId) {
+    return message;
+  }
+
+  if (!message?.id) {
+    return message;
+  }
+
+  console.warn("Mensagem Delta incompleta. A obter email completo:", message);
+
+  return fetchFullGraphMessageById(message.id);
 }
 
 function setCategoryStatus(message, isError = false) {
@@ -2323,6 +2411,8 @@ function orderOutlookCategories(categories) {
 function cleanOutlookCategoryName(categoryName) {
   return String(categoryName || "")
     .replace(/^\./, "")
+    .replace(/\s*,\s*/g, " - ")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
@@ -2362,6 +2452,52 @@ function getGraphMessageIdFromOfficeItem() {
   );
 }
 
+const OUTLOOK_CATEGORY_COLOR_PRESETS = [
+  "preset0",
+  "preset1",
+  "preset2",
+  "preset3",
+  "preset4",
+  "preset5",
+  "preset6",
+  "preset7",
+  "preset8",
+  "preset9",
+  "preset10",
+  "preset11",
+  "preset12",
+  "preset13",
+  "preset14",
+  "preset15",
+  "preset16",
+  "preset17",
+  "preset18",
+  "preset19",
+  "preset20",
+  "preset21",
+  "preset22",
+  "preset23",
+  "preset24",
+];
+
+function getStableColorPresetFromName(categoryName) {
+  const normalized = normalizeOutlookCategoryName(categoryName);
+
+  if (!normalized) {
+    return "preset13";
+  }
+
+  let hash = 0;
+
+  for (let i = 0; i < normalized.length; i += 1) {
+    hash = (hash * 31 + normalized.charCodeAt(i)) >>> 0;
+  }
+
+  return OUTLOOK_CATEGORY_COLOR_PRESETS[
+    hash % OUTLOOK_CATEGORY_COLOR_PRESETS.length
+  ];
+}
+
 function getColorForOutlookCategory(categoryName) {
   const normalized = normalizeOutlookCategoryName(categoryName);
 
@@ -2383,27 +2519,7 @@ function getColorForOutlookCategory(categoryName) {
   }
 
   // Categorias temáticas
-  if (normalized.includes("iluminacao publica")) {
-    return "preset2";
-  }
-
-  if (normalized.includes("publicidade")) {
-    return "preset23";
-  }
-
-  if (normalized.includes("espacos verdes")) {
-    return "preset7";
-  }
-
-  if (normalized.includes("apoio institucional")) {
-    return "preset1";
-  }
-
-  if (normalized.includes("outro")) {
-    return "preset8";
-  }
-
-  return "preset13";
+  return getStableColorPresetFromName(categoryName);
 }
 
 async function getOutlookMasterCategories(accessToken) {
