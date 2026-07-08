@@ -393,7 +393,7 @@ async function hydrateEmailState() {
 
 export async function run() {
   try {
-    setStatus("A carregar dados do email...");
+    setStatus("A carregar o email selecionado...");
 
     const item = Office.context.mailbox.item;
 
@@ -426,10 +426,10 @@ export async function run() {
     resetResponseUi();
     await hydrateEmailState();
 
-    setStatus("Dados do email carregados com sucesso.");
+    setStatus("Email carregado com sucesso.");
   } catch (error) {
     console.error("Erro ao carregar dados do email:", error);
-    setStatus(`Erro: ${error.message}`, true);
+    setStatus(`Erro ao carregar o email selecionado: ${error.message}`, true);
 
     setText("item-subject", "N/A");
     setText("item-from", "N/A");
@@ -448,7 +448,7 @@ async function handleCategorize() {
       throw new Error("Ainda não existem dados do email carregados.");
     }
 
-    setStatus("A categorizar email...");
+    setStatus("A categorizar o email selecionado...");
 
     const result = await categorizeEmail(currentEmailData);
     console.log("Resultado da categorização:", result);
@@ -461,11 +461,11 @@ async function handleCategorize() {
 
     try {
       await applyCategoryAndMarkReadToOpenEmail(categoria);
-      setStatus("Email categorizado, categoria aplicada no Outlook e marcado como lido.");
+      setStatus("Email categorizado com sucesso. A categoria foi aplicada no Outlook.");
     } catch (outlookError) {
       console.warn("Categoria guardada no backend, mas não aplicada no Outlook:", outlookError);
       setStatus(
-        `Email categorizado no plugin, mas não foi possível atualizar o Outlook: ${outlookError.message}`,
+        `Email categorizado com sucesso no plugin, mas não foi possível atualizar o Outlook: ${outlookError.message}`,
         true
       );
     }
@@ -513,6 +513,32 @@ async function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function normalizeResponseStatusLabel(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+
+  if (["pending", "queued", "queue"].includes(normalized)) {
+    return "PENDENTE";
+  }
+
+  if (["processing", "processando", "running"].includes(normalized)) {
+    return "EM PROCESSAMENTO";
+  }
+
+  if (["done", "completed", "gerada", "generated"].includes(normalized)) {
+    return "GERADA";
+  }
+
+  if (["validated", "validada"].includes(normalized)) {
+    return "VALIDADA";
+  }
+
+  if (["error", "erro", "failed"].includes(normalized)) {
+    return "ERRO";
+  }
+
+  return status || "Sem estado";
+}
+
 async function waitForGeneratedResponse(emailData, options = {}) {
   const maxAttempts = options.maxAttempts || 20;
   const delayMs = options.delayMs || 3000;
@@ -550,7 +576,7 @@ async function applyGeneratedResponseToUi(response) {
   lastResponseId = response.id_resposta || lastResponseId || null;
 
   setText("response-id", lastResponseId || "-");
-  setText("response-job-status", response.status || "GERADA");
+  setText("response-job-status", normalizeResponseStatusLabel(response.status || "GERADA"));
   setText(
     "response-content",
     response.conteudo && response.conteudo.trim()
@@ -565,8 +591,8 @@ async function handleGenerateResponse() {
       throw new Error("Ainda não existem dados do email carregados.");
     }
 
-    setStatus("A pedir geração de resposta...");
-    setText("response-job-status", "PENDING");
+    setStatus("A gerar sugestão de resposta...");
+    setText("response-job-status", "PENDENTE");
     setText(
       "response-content",
       "Pedido enviado. A aguardar geração automática da resposta..."
@@ -603,7 +629,7 @@ async function handleGenerateResponse() {
 
     lastResponseId = result.job_id || result.id_resposta || null;
     setText("response-id", lastResponseId || "-");
-    setText("response-job-status", result.status || "queued");
+    setText("response-job-status", normalizeResponseStatusLabel(result.status || "queued"));
 
     try {
       await applyWorkflowCategoryToOpenEmail("2. Resposta Gerada");
@@ -614,7 +640,7 @@ async function handleGenerateResponse() {
       );
     }
 
-    setStatus("Pedido enviado. A aguardar resposta do backend...");
+    setStatus("Pedido enviado. A aguardar geração da resposta...");
 
     const generatedResponse = await waitForGeneratedResponse(emailDataForResponse, {
       maxAttempts: 40,
@@ -628,14 +654,14 @@ async function handleGenerateResponse() {
       return;
     }
 
-    setText("response-job-status", "PROCESSING");
+    setText("response-job-status", "EM PROCESSAMENTO");
     setText(
       "response-content",
       "A resposta ainda está a ser gerada. Clique em “Atualizar resposta gerada” para verificar novamente."
     );
 
     setStatus(
-      "O pedido foi enviado, mas a resposta ainda não ficou disponível. Use “Atualizar resposta gerada” dentro de alguns segundos."
+      "A resposta ainda está em processamento. Use “Atualizar resposta gerada” dentro de alguns segundos."
     );
   } catch (error) {
     console.error("Erro ao gerar resposta:", error);
@@ -650,7 +676,7 @@ async function handleRefreshResponse() {
       throw new Error("Ainda não existem dados do email carregados.");
     }
 
-    setStatus("A atualizar resposta gerada...");
+    setStatus("A verificar resposta gerada...");
 
     const result = await getLatestResponse(currentEmailData);
     console.log("Última resposta gerada:", result);
@@ -665,10 +691,10 @@ async function handleRefreshResponse() {
         : "Resposta ainda sem conteúdo disponível."
     );
 
-    setStatus("Resposta atualizada com sucesso.");
+    setStatus("Resposta gerada carregada com sucesso.");
   } catch (error) {
     console.error("Erro ao atualizar resposta:", error);
-    setStatus(`Erro ao atualizar resposta: ${error.message}`, true);
+    setStatus(`Erro ao verificar resposta gerada: ${error.message}`, true);
   }
 }
 
@@ -682,7 +708,7 @@ async function handleValidateResponse() {
       throw new Error("Ainda não existe uma resposta carregada para validar.");
     }
 
-    setStatus("A validar resposta...");
+    setStatus("A validar a resposta gerada...");
 
     const result = await validateResponse(currentEmailData, lastResponseId);
     console.log("Resposta validada:", result);
@@ -692,7 +718,7 @@ async function handleValidateResponse() {
 
     await applyWorkflowCategoryToOpenEmail("3. Resposta Validada");
 
-    setStatus("Resposta validada com sucesso e categoria aplicada no Outlook.");
+    setStatus("Resposta validada com sucesso. A categoria foi aplicada no Outlook.");
   } catch (error) {
     console.error("Erro ao validar resposta:", error);
     setStatus(`Erro ao validar resposta: ${error.message}`, true);
@@ -991,7 +1017,7 @@ async function handleMicrosoftNaaLoginOnly(options = {}) {
 
     setGraphStatus(
       silent
-        ? `Sessão Microsoft ligada automaticamente por SSO/NAA: ${graphAccountUsername}.`
+        ? `Sessão Microsoft ligada automaticamente: ${graphAccountUsername}.`
         : `SSO/NAA Microsoft concluído com sucesso: ${graphAccountUsername}.`
     );
 
@@ -2482,7 +2508,7 @@ async function handleOpenReplyInOutlook() {
 
         applyCategoryAndMarkReadByGraphId(graphMessageId, "4. Respondido")
           .then(() => {
-            setStatus("Resposta aberta no Outlook e email marcado como respondido.");
+            setStatus("Resposta aberta no Outlook. O email foi marcado como respondido.");
           })
           .catch((error) => {
             console.warn("Resposta aberta, mas não foi possível aplicar '4. Respondido':", error);

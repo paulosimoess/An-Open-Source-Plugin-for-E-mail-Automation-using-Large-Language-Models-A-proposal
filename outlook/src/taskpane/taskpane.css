@@ -814,3 +814,27 @@ body {
 .hidden-debug-section {
   display: none;
 }
+
+#graph-login-button,
+#graph-read-inbox-button,
+#graph-process-inbox-button,
+#graph-process-unread-button {
+  margin-top: 6px;
+  margin-bottom: 6px;
+}
+
+#graph-process-unread-button {
+  margin-bottom: 0;
+}
+
+#generate-response-button,
+#refresh-response-button,
+#validate-response-button,
+#open-reply-button {
+  margin-top: 6px;
+  margin-bottom: 6px;
+}
+
+#open-reply-button {
+  margin-bottom: 0;
+}

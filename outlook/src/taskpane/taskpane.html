@@ -28,7 +28,7 @@
                     <span class="summary-icon">📨</span>
                     Caixa de Entrada Outlook
                 </span>
-                <small>Processamento incremental e categorização</small>
+                <small>Sincronização e categorização de emails</small>
             </summary>
 
             <div class="details-content inbox-clean-panel">
@@ -40,14 +40,14 @@
                 </div>
 
                 <div class="main-flow-card">
-                    <p class="flow-label">Fluxo principal</p>
+                    <p class="flow-label">Processamento de emails</p>
 
                     <div role="button" id="graph-delta-sync-button" class="ms-Button ms-Button--primary main-action-button">
-                        <span class="ms-Button-label">Processar emails novos</span>
+                        <span class="ms-Button-label">Processar novos emails</span>
                     </div>
 
                     <p class="flow-help">
-                        Usa sincronização incremental para detetar emails novos ou alterados e enviá-los para categorização.
+                        Procura emails novos ou alterados e envia-os para categorização.
                     </p>
                 </div>
 
@@ -59,19 +59,19 @@
                 </div>
 
                 <details class="fallback-section">
-                    <summary>Opções avançadas</summary>
+                    <summary>Opções adicionais</summary>
 
                     <div class="button-grid fallback-buttons">
                         <div role="button" id="graph-login-button" class="ms-Button ms-Button--primary secondary-action-button">
-                            <span class="ms-Button-label">Reautenticar Microsoft</span>
+                            <span class="ms-Button-label">Voltar a iniciar sessão</span>
                         </div>
 
                         <div role="button" id="graph-read-inbox-button" class="ms-Button ms-Button--primary secondary-action-button">
-                            <span class="ms-Button-label">Carregar Inbox completa</span>
+                            <span class="ms-Button-label">Carregar inbox completa</span>
                         </div>
 
                         <div role="button" id="graph-process-inbox-button" class="ms-Button ms-Button--primary secondary-action-button">
-                            <span class="ms-Button-label">Categorizar lista carregada</span>
+                            <span class="ms-Button-label">Categorizar emails carregados</span>
                         </div>
 
                         <div role="button" id="graph-process-unread-button" class="ms-Button ms-Button--primary secondary-action-button">
@@ -80,7 +80,7 @@
                     </div>
 
                     <p class="flow-help">
-                        Opções mantidas para testes, fallback e demonstração manual.
+                        Opções mantidas para fallback/demonstração manual.
                     </p>
                 </details>
 
@@ -93,8 +93,8 @@
         <section class="card hero-card">
             <div class="section-title-row">
                 <div>
-                    <p class="eyebrow">Email atual</p>
-                    <h2 class="ms-font-xl">Ações do email aberto</h2>
+                    <p class="eyebrow">Email selecionado</p>
+                    <h2 class="ms-font-xl">Detalhes do email selecionado</h2>
                 </div>
             </div>
 
@@ -116,7 +116,7 @@
             </div>
 
             <div role="button" id="run" class="ms-Button ms-Button--primary">
-                <span class="ms-Button-label">Atualizar dados do email aberto</span>
+                <span class="ms-Button-label">Recarregar email selecionado</span>
             </div>
         </section>
 
@@ -134,20 +134,20 @@
             </div>
 
             <div class="field">
-                <div class="field-label">Palavras-chave identificadas</div>
+                <div class="field-label">Palavras-chave utilizadas</div>
                 <div id="used-keywords" class="field-value">-</div>
             </div>
 
             <div role="button" id="categorize-button" class="ms-Button ms-Button--primary">
-                <span class="ms-Button-label">Recategorizar email aberto</span>
+                <span class="ms-Button-label">Recategorizar email selecionado</span>
             </div>
         </section>
 
         <section class="card">
             <div class="section-title-row">
                 <div>
-                    <p class="eyebrow">Resposta automática</p>
-                    <h2 class="ms-font-xl">Resposta gerada</h2>
+                    <p class="eyebrow">Resposta sugerida</p>
+                    <h2 class="ms-font-xl">Sugestão de resposta</h2>
                 </div>
             </div>
 
@@ -157,7 +157,7 @@
             </div>
 
             <div class="field">
-                <div class="field-label">Conteúdo sugerido</div>
+                <div class="field-label">Resposta sugerida</div>
                 <div id="response-content" class="field-value field-body response-preview">Nenhuma resposta carregada.</div>
             </div>
 
@@ -186,11 +186,11 @@
                     <span class="summary-icon">🏷️</span>
                     Gestão de Categorias
                 </span>
-                <small>Categorias, labels e palavras‑chave</small>
+                <small>Categorias e palavras‑chave</small>
             </summary>
 
             <div class="details-content">
-                <p id="category-status" class="status-pill">Carregue as categorias para gerir palavras-chave.</p>
+                <p id="category-status" class="status-pill">Carregue as categorias para consultar e editar palavras-chave.</p>
 
                 <div role="button" id="load-categories-button" class="ms-Button ms-Button--primary">
                     <span class="ms-Button-label">Carregar categorias</span>
@@ -208,7 +208,7 @@
 
                 <div class="field">
                     <div class="field-label">Palavras-chave da categoria</div>
-                    <div id="keywords-list" class="field-value field-body">Nenhuma palavra-chave carregada.</div>
+                    <div id="keywords-list" class="field-value field-body">Nenhuma palavra-chave associada.</div>
                 </div>
 
                 <div class="field">
@@ -223,7 +223,7 @@
                 <div class="field">
                     <div class="field-label">Criar nova categoria</div>
 
-                    <input id="new-category-name-input" class="text-input" type="text" placeholder="Nome da categoria. Ex.: Espaços Verdes" />
+                    <input id="new-category-name-input" class="text-input" type="text" placeholder="Nome da nova categoria." />
 
                     <textarea id="new-category-question-input" class="text-input textarea-input" placeholder="Questão associada. Ex.: Pedidos relacionados com árvores, jardins e espaços verdes."></textarea>
 
