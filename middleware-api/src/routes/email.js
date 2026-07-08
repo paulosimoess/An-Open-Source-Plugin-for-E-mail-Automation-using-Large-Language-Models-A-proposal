@@ -311,11 +311,16 @@ export default async function emailRoutes(fastify, opts) {
             assunto,
             corpo,
             message_id: body_message_id,
-            thread_id: body_thread_id
+            thread_id: body_thread_id,
+            categoria,
+            categoria_nome
         } = request.body;
 
         const message_id = body_message_id || request.params.message_id;
         const thread_id = body_thread_id || request.params.thread_id;
+        const categoriaDoPedido = categoria_nome || categoria || null;
+
+        console.log("Categoria recebida no endpoint RAG:", categoriaDoPedido || "(não enviada)");
 
         if (!remetente || !assunto || !corpo || !message_id || !thread_id) {
             return reply.code(400).send({
@@ -361,13 +366,17 @@ export default async function emailRoutes(fastify, opts) {
                 assunto,
                 corpo,
                 thread_id,
-                id_implementacao
+                id_implementacao,
+                categoria: categoriaDoPedido,
+                categoria_nome: categoriaDoPedido
             });
 
             return reply.code(202).send({
                 status: "queued",
                 job_id: jobId,
-                message_id
+                message_id,
+                thread_id,
+                categoria_nome: categoriaDoPedido
             });
 
         } catch (err) {

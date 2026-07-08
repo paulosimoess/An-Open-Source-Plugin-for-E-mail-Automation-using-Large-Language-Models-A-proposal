@@ -318,6 +318,18 @@ function applyCategorizationToCurrentEmail(categoria, keywordsUsadas) {
     "used-keywords",
     keywordsUsadas?.length ? keywordsUsadas.join(", ") : "Nenhuma keyword usada"
   );
+
+  if (
+    currentEmailData &&
+    categoria &&
+    categoria !== "Sem categoria" &&
+    categoria !== "Ainda não categorizado" &&
+    categoria !== "Erro"
+  ) {
+    currentEmailData.categoria = categoria;
+    currentEmailData.categoria_nome = categoria;
+    currentEmailData.keywords_usadas = keywordsUsadas || [];
+  }
 }
 
 async function hydrateEmailState() {
@@ -473,6 +485,80 @@ async function applyWorkflowCategoryToOpenEmail(categoryName) {
   }
 }
 
+function isResponseStillProcessing(status) {
+  const normalizedStatus = String(status || "")
+    .trim()
+    .toLowerCase();
+
+  return [
+    "pending",
+    "queued",
+    "queue",
+    "processing",
+    "processando",
+    "em processamento",
+    "running",
+  ].includes(normalizedStatus);
+}
+
+function hasGeneratedResponseContent(response) {
+  return Boolean(
+    response?.conteudo &&
+    String(response.conteudo).trim() &&
+    String(response.conteudo).trim() !== "Nenhuma resposta carregada."
+  );
+}
+
+async function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForGeneratedResponse(emailData, options = {}) {
+  const maxAttempts = options.maxAttempts || 20;
+  const delayMs = options.delayMs || 3000;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    setText(
+      "response-job-status",
+      `PROCESSING (${attempt}/${maxAttempts})`
+    );
+
+    const latestResponse = await getLatestResponse(emailData);
+
+    if (latestResponse?.id_resposta) {
+      lastResponseId = latestResponse.id_resposta;
+      setText("response-id", latestResponse.id_resposta);
+    }
+
+    const status = latestResponse?.status || "PROCESSING";
+
+    if (hasGeneratedResponseContent(latestResponse)) {
+      return latestResponse;
+    }
+
+    if (!isResponseStillProcessing(status) && latestResponse?.conteudo) {
+      return latestResponse;
+    }
+
+    await sleep(delayMs);
+  }
+
+  return null;
+}
+
+async function applyGeneratedResponseToUi(response) {
+  lastResponseId = response.id_resposta || lastResponseId || null;
+
+  setText("response-id", lastResponseId || "-");
+  setText("response-job-status", response.status || "GERADA");
+  setText(
+    "response-content",
+    response.conteudo && response.conteudo.trim()
+      ? response.conteudo
+      : "Resposta ainda sem conteúdo disponível."
+  );
+}
+
 async function handleGenerateResponse() {
   try {
     if (!currentEmailData) {
@@ -481,18 +567,76 @@ async function handleGenerateResponse() {
 
     setStatus("A pedir geração de resposta...");
     setText("response-job-status", "PENDING");
-    setText("response-content", "Pedido enviado. Aguarde e depois clique em 'Atualizar resposta'.");
+    setText(
+      "response-content",
+      "Pedido enviado. A aguardar geração automática da resposta..."
+    );
 
-    const result = await requestRagResponse(currentEmailData);
+    const categoriaDoPainel =
+      document.getElementById("suggested-category")?.textContent?.trim() ||
+      null;
+
+    const categoriaAtual =
+      currentEmailData.categoria_nome ||
+      currentEmailData.categoria ||
+      categoriaDoPainel ||
+      null;
+
+    const categoriaValida =
+      categoriaAtual &&
+      categoriaAtual !== "Sem categoria" &&
+      categoriaAtual !== "Ainda não categorizado" &&
+      categoriaAtual !== "Erro"
+        ? categoriaAtual
+        : null;
+
+    const emailDataForResponse = {
+      ...currentEmailData,
+      categoria: categoriaValida,
+      categoria_nome: categoriaValida,
+    };
+
+    console.log("Email enviado para geração RAG:", emailDataForResponse);
+
+    const result = await requestRagResponse(emailDataForResponse);
     console.log("Pedido de resposta gerada:", result);
 
-    lastResponseId = result.job_id || null;
-    setText("response-id", result.job_id || "-");
+    lastResponseId = result.job_id || result.id_resposta || null;
+    setText("response-id", lastResponseId || "-");
     setText("response-job-status", result.status || "queued");
 
-    await applyWorkflowCategoryToOpenEmail("2. Resposta Gerada");
+    try {
+      await applyWorkflowCategoryToOpenEmail("2. Resposta Gerada");
+    } catch (categoryError) {
+      console.warn(
+        "Pedido de resposta enviado, mas não foi possível aplicar a categoria 2. Resposta Gerada:",
+        categoryError
+      );
+    }
 
-    setStatus("Pedido de geração de resposta enviado com sucesso e categoria aplicada no Outlook.");
+    setStatus("Pedido enviado. A aguardar resposta do backend...");
+
+    const generatedResponse = await waitForGeneratedResponse(emailDataForResponse, {
+      maxAttempts: 40,
+      delayMs: 5000,
+    });
+
+    if (generatedResponse) {
+      await applyGeneratedResponseToUi(generatedResponse);
+
+      setStatus("Resposta gerada com sucesso. Reveja antes de validar.");
+      return;
+    }
+
+    setText("response-job-status", "PROCESSING");
+    setText(
+      "response-content",
+      "A resposta ainda está a ser gerada. Clique em “Atualizar resposta gerada” para verificar novamente."
+    );
+
+    setStatus(
+      "O pedido foi enviado, mas a resposta ainda não ficou disponível. Use “Atualizar resposta gerada” dentro de alguns segundos."
+    );
   } catch (error) {
     console.error("Erro ao gerar resposta:", error);
     setStatus(`Erro ao gerar resposta: ${error.message}`, true);

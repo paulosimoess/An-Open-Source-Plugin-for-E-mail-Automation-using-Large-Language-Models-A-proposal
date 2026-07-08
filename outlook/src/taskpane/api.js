@@ -81,18 +81,20 @@ export async function categorizeEmail(emailData) {
 }
 
 export async function requestRagResponse(emailData) {
-  const { message_id, thread_id, remetente, assunto, corpo } = emailData;
-
   return authorizedFetch(
     `${API_BASE_URL}/implementacao/${IMPLEMENTACAO_ID}/thread/outlook-thread/email/outlook-message/resposta/rag`,
     {
       method: "POST",
       body: JSON.stringify({
-        message_id,
-        thread_id,
-        remetente,
-        assunto,
-        corpo,
+        message_id: emailData.message_id,
+        thread_id: emailData.thread_id,
+        remetente: emailData.remetente,
+        assunto: emailData.assunto,
+        corpo: emailData.corpo,
+        id_implementacao: IMPLEMENTACAO_ID,
+
+        categoria: emailData.categoria || emailData.categoria_nome || null,
+        categoria_nome: emailData.categoria_nome || emailData.categoria || null,
       }),
     }
   );
