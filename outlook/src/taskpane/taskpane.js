@@ -93,6 +93,8 @@ Office.onReady((info) => {
     const createCategoryButton = document.getElementById("create-category-button");
     if (createCategoryButton) createCategoryButton.onclick = handleCreateCategory;
 
+    loadCategoriesAutomatically();
+
     const keywordsList = document.getElementById("keywords-list");
     if (keywordsList) {
       keywordsList.onclick = (event) => {
@@ -107,9 +109,22 @@ Office.onReady((info) => {
 
     run();
 
-    tryRestoreMicrosoftSessionAutomatically();
+    //tryRestoreMicrosoftSessionAutomatically();
   }
 });
+
+async function loadCategoriesAutomatically() {
+  try {
+    await handleLoadCategories();
+  } catch (error) {
+    console.warn("Não foi possível carregar categorias automaticamente:", error);
+
+    setCategoryStatus(
+      "Não foi possível carregar as categorias automaticamente. Use “Carregar categorias” para tentar novamente.",
+      true
+    );
+  }
+}
 
 function hideElement(id) {
   const el = document.getElementById(id);
@@ -1297,7 +1312,7 @@ async function handleReadInboxWithGraph() {
     renderGraphInboxMessages(messages);
     updateGraphAccountUi();
 
-    setGraphStatus(`Leitura concluída. Emails carregados: ${messages.length}.`);
+    setGraphStatus(`Caixa de entrada carregada com sucesso. Emails carregados: ${messages.length}.`);
   } catch (error) {
     console.error("Erro ao ler Inbox via Graph:", error);
     setGraphStatus(`Erro ao ler Inbox: ${error.message}`, true);
@@ -2156,22 +2171,39 @@ async function handleUpdateCategory() {
       throw new Error("Indica o novo nome da categoria.");
     }
 
-    setCategoryStatus(`A atualizar categoria "${selectedCategory.nome}"...`);
+    const categoryId = selectedCategory.id_categoria;
+    const previousCategory = selectedCategory;
+    const previousName = previousCategory.nome || "categoria selecionada";
 
-    const result = await updateCategory(selectedCategory.id_categoria, newName);
-    const updatedCategory = result.categoria || result;
+    setCategoryStatus(`A atualizar categoria "${previousName}"...`);
+
+    const result = await updateCategory(categoryId, newName);
+    const updatedCategory = result.categoria || result || {};
 
     await handleLoadCategories();
 
-    selectedCategory = updatedCategory;
+    const latestCategory =
+      categoriesCache.find(
+        (category) => String(category.id_categoria) === String(categoryId)
+      ) || {
+        ...previousCategory,
+        ...updatedCategory,
+        id_categoria: categoryId,
+        nome: updatedCategory.nome || (newName.startsWith(".") ? newName : `.${newName}`),
+      };
 
-    setText("selected-category", updatedCategory.nome || `.${newName}`);
+    selectedCategory = latestCategory;
+
+    pendingDeleteCategoryId = null;
+    resetCategoryDeleteButtons();
+
+    setText("selected-category", selectedCategory.nome || `.${newName}`);
 
     if (input) {
-      input.value = normalizeCategoryNameForEditing(updatedCategory.nome || newName);
+      input.value = normalizeCategoryNameForEditing(selectedCategory.nome || newName);
     }
 
-    setCategoryStatus(`Categoria atualizada com sucesso: ${updatedCategory.nome || newName}`);
+    setCategoryStatus(`Categoria atualizada com sucesso: ${selectedCategory.nome || newName}`);
   } catch (error) {
     console.error("Erro ao atualizar categoria:", error);
     setCategoryStatus(`Erro ao atualizar categoria: ${error.message}`, true);
@@ -2292,14 +2324,34 @@ async function handleDeleteCategory() {
     }
 
     const categoryId = selectedCategory.id_categoria;
-    const categoryName = selectedCategory.nome || "categoria selecionada";
+
+    const latestCategory =
+      categoriesCache.find(
+        (category) => String(category.id_categoria) === String(categoryId)
+      ) || selectedCategory;
+
+    const categoryName =
+      latestCategory?.nome ||
+      selectedCategory?.nome ||
+      "categoria selecionada";
+
     const deleteButton = document.getElementById("delete-category-button");
     const deleteButtonLabel = deleteButton?.querySelector(".ms-Button-label");
+
+    const categoriesList = document.getElementById("categories-list");
+    const previousScrollTop = categoriesList ? categoriesList.scrollTop : 0;
 
     if (pendingDeleteCategoryId !== categoryId) {
       pendingDeleteCategoryId = categoryId;
 
       setCategoryDeleteConfirmState(categoryId);
+
+      requestAnimationFrame(() => {
+        const updatedCategoriesList = document.getElementById("categories-list");
+        if (updatedCategoriesList) {
+          updatedCategoriesList.scrollTop = previousScrollTop;
+        }
+      });
 
       setCategoryStatus(
         `Clica novamente em Confirmar para eliminar a categoria "${categoryName}".`
@@ -2327,7 +2379,7 @@ async function handleDeleteCategory() {
     }
 
     setText("selected-category", "Nenhuma categoria selecionada.");
-    setHtml("keywords-list", "Nenhuma palavra-chave carregada.");
+    setHtml("keywords-list", "Nenhuma palavra-chave associada.");
 
     await handleLoadCategories();
 
