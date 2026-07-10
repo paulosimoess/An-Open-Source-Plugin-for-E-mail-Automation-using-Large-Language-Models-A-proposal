@@ -1414,6 +1414,190 @@ async function getExistingCategorization(emailData) {
   }
 }
 
+async function replaceCategoryInOutlookThreads(
+  threadIds,
+  oldCategory,
+  newCategory
+) {
+  if (!Array.isArray(threadIds) || threadIds.length === 0) {
+    console.log("Nenhuma thread do Outlook precisa de ser atualizada.");
+    return {
+      updatedMessages: 0,
+      failedMessages: 0
+    };
+  }
+
+  const oldCategoryName = cleanOutlookCategoryName(oldCategory);
+  const newCategoryName = cleanOutlookCategoryName(newCategory);
+
+  if (!isValidOutlookCategory(newCategoryName)) {
+    throw new Error("A categoria de destino é inválida.");
+  }
+
+  const accessToken = await getGraphAccessToken();
+
+  await syncWorkflowCategoryColors(accessToken);
+  await ensureOutlookMasterCategoryExists(accessToken, newCategoryName);
+
+  let updatedMessages = 0;
+  let failedMessages = 0;
+
+  for (const threadId of threadIds) {
+    if (!threadId) continue;
+
+    try {
+      const messages = await getMessagesByConversationId(
+        accessToken,
+        threadId
+      );
+
+      console.log(
+        `Thread ${threadId}: ${messages.length} mensagem(ns) encontrada(s).`
+      );
+
+      for (const message of messages) {
+        try {
+          const currentCategories = Array.isArray(message.categories)
+            ? message.categories
+            : [];
+
+          const filteredCategories = currentCategories.filter(
+            (category) =>
+              normalizeCategoryForComparison(category) !==
+              normalizeCategoryForComparison(oldCategoryName)
+          );
+
+          const alreadyHasNewCategory = filteredCategories.some(
+            (category) =>
+              normalizeCategoryForComparison(category) ===
+              normalizeCategoryForComparison(newCategoryName)
+          );
+
+          const updatedCategories = orderOutlookCategories(
+            alreadyHasNewCategory
+              ? filteredCategories
+              : [...filteredCategories, newCategoryName]
+          );
+
+          await updateOutlookMessageCategories(
+            accessToken,
+            message.id,
+            updatedCategories
+          );
+
+          updatedMessages += 1;
+        } catch (messageError) {
+          failedMessages += 1;
+
+          console.error(
+            `Erro ao atualizar categorias da mensagem ${message.id}:`,
+            messageError
+          );
+        }
+      }
+    } catch (threadError) {
+      console.error(
+        `Erro ao procurar mensagens da thread ${threadId}:`,
+        threadError
+      );
+
+      failedMessages += 1;
+    }
+  }
+
+  return {
+    updatedMessages,
+    failedMessages
+  };
+}
+
+function normalizeCategoryForComparison(categoryName) {
+  return cleanOutlookCategoryName(categoryName)
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+async function getMessagesByConversationId(accessToken, conversationId) {
+  const escapedConversationId = String(conversationId).replace(/'/g, "''");
+
+  const query = new URLSearchParams({
+    "$filter": `conversationId eq '${escapedConversationId}'`,
+    "$select": "id,conversationId,categories,subject",
+    "$top": "100"
+  });
+
+  let nextUrl =
+    `https://graph.microsoft.com/v1.0/me/messages?${query.toString()}`;
+
+  const messages = [];
+
+  while (nextUrl) {
+    const response = await fetch(nextUrl, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json"
+      }
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+
+      if (isGraphAuthenticationError(response, errorText)) {
+        handleInvalidGraphSession();
+      }
+
+      throw new Error(
+        errorText || "Erro ao procurar emails da conversa no Outlook."
+      );
+    }
+
+    const data = await response.json();
+
+    if (Array.isArray(data.value)) {
+      messages.push(...data.value);
+    }
+
+    nextUrl = data["@odata.nextLink"] || null;
+  }
+
+  return messages;
+}
+
+async function updateOutlookMessageCategories(
+  accessToken,
+  graphMessageId,
+  categories
+) {
+  const response = await fetch(
+    `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(graphMessageId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        categories
+      })
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+
+    if (isGraphAuthenticationError(response, errorText)) {
+      handleInvalidGraphSession();
+    }
+
+    throw new Error(
+      errorText || "Erro ao atualizar as categorias do email."
+    );
+  }
+}
+
 async function ensureProcessedEmailVisibleInOutlook(message, existingCategorization) {
   if (!message?.id || !existingCategorization?.categoria) {
     return false;
@@ -2336,10 +2520,13 @@ async function handleDeleteCategory() {
       "categoria selecionada";
 
     const deleteButton = document.getElementById("delete-category-button");
-    const deleteButtonLabel = deleteButton?.querySelector(".ms-Button-label");
+    const deleteButtonLabel =
+      deleteButton?.querySelector(".ms-Button-label");
 
     const categoriesList = document.getElementById("categories-list");
-    const previousScrollTop = categoriesList ? categoriesList.scrollTop : 0;
+    const previousScrollTop = categoriesList
+      ? categoriesList.scrollTop
+      : 0;
 
     if (pendingDeleteCategoryId !== categoryId) {
       pendingDeleteCategoryId = categoryId;
@@ -2347,7 +2534,9 @@ async function handleDeleteCategory() {
       setCategoryDeleteConfirmState(categoryId);
 
       requestAnimationFrame(() => {
-        const updatedCategoriesList = document.getElementById("categories-list");
+        const updatedCategoriesList =
+          document.getElementById("categories-list");
+
         if (updatedCategoriesList) {
           updatedCategoriesList.scrollTop = previousScrollTop;
         }
@@ -2362,7 +2551,27 @@ async function handleDeleteCategory() {
 
     setCategoryStatus(`A apagar categoria "${categoryName}"...`);
 
-    await deleteCategory(categoryId);
+    const deleteResult = await deleteCategory(categoryId);
+
+    console.log(
+      "Resultado da eliminação da categoria:",
+      deleteResult
+    );
+
+    setCategoryStatus(
+      `Categoria eliminada no backend. A atualizar os emails no Outlook...`
+    );
+
+    const outlookSyncResult = await replaceCategoryInOutlookThreads(
+      deleteResult?.threads_afetadas || [],
+      deleteResult?.categoria_eliminada || categoryName,
+      deleteResult?.categoria_destino || ".Outro"
+    );
+
+    console.log(
+      "Resultado da sincronização com o Outlook:",
+      outlookSyncResult
+    );
 
     pendingDeleteCategoryId = null;
     selectedCategory = null;
@@ -2370,6 +2579,7 @@ async function handleDeleteCategory() {
     resetCategoryDeleteButtons();
 
     const input = document.getElementById("edit-category-name-input");
+
     if (input) {
       input.value = "";
     }
@@ -2378,15 +2588,51 @@ async function handleDeleteCategory() {
       deleteButtonLabel.textContent = "Apagar categoria selecionada";
     }
 
-    setText("selected-category", "Nenhuma categoria selecionada.");
-    setHtml("keywords-list", "Nenhuma palavra-chave associada.");
+    setText(
+      "selected-category",
+      "Nenhuma categoria selecionada."
+    );
+
+    setHtml(
+      "keywords-list",
+      "Nenhuma palavra-chave associada."
+    );
 
     await handleLoadCategories();
 
-    setCategoryStatus(`Categoria "${categoryName}" apagada com sucesso.`);
+    const updatedMessages =
+      outlookSyncResult?.updatedMessages || 0;
+
+    const failedMessages =
+      outlookSyncResult?.failedMessages || 0;
+
+    if (failedMessages > 0) {
+      setCategoryStatus(
+        `Categoria "${categoryName}" apagada, mas ${failedMessages} email(s) não puderam ser atualizados no Outlook.`,
+        true
+      );
+
+      return;
+    }
+
+    if (updatedMessages > 0) {
+      setCategoryStatus(
+        `Categoria "${categoryName}" apagada e ${updatedMessages} email(s) atualizado(s) para "Outro".`
+      );
+
+      return;
+    }
+
+    setCategoryStatus(
+      `Categoria "${categoryName}" apagada com sucesso. Nenhum email do Outlook precisava de ser atualizado.`
+    );
   } catch (error) {
     console.error("Erro ao apagar categoria:", error);
-    setCategoryStatus(`Erro ao apagar categoria: ${error.message}`, true);
+
+    setCategoryStatus(
+      `Erro ao apagar categoria: ${error.message}`,
+      true
+    );
   }
 }
 
@@ -3213,8 +3459,13 @@ async function ensureOutlookMasterCategoryExists(accessToken, categoryName) {
   return createOutlookMasterCategory(accessToken, cleanCategoryName);
 }
 
-async function applyCategoryAndMarkReadByGraphId(graphMessageId, rawCategory) {
-  const rawCategories = Array.isArray(rawCategory) ? rawCategory : [rawCategory];
+async function applyCategoryAndMarkReadByGraphId(
+  graphMessageId,
+  rawCategory
+) {
+  const rawCategories = Array.isArray(rawCategory)
+    ? rawCategory
+    : [rawCategory];
 
   const categoryNames = rawCategories
     .map((category) => cleanOutlookCategoryName(category))
@@ -3225,14 +3476,20 @@ async function applyCategoryAndMarkReadByGraphId(graphMessageId, rawCategory) {
   }
 
   const accessToken = await getGraphAccessToken();
+
   await syncWorkflowCategoryColors(accessToken);
 
   for (const categoryName of categoryNames) {
-    await ensureOutlookMasterCategoryExists(accessToken, categoryName);
+    await ensureOutlookMasterCategoryExists(
+      accessToken,
+      categoryName
+    );
   }
 
   const getResponse = await fetch(
-    `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(graphMessageId)}?$select=categories,isRead`,
+    `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(
+      graphMessageId
+    )}?$select=categories,isRead`,
     {
       method: "GET",
       headers: {
@@ -3249,21 +3506,72 @@ async function applyCategoryAndMarkReadByGraphId(graphMessageId, rawCategory) {
       handleInvalidGraphSession();
     }
 
-    throw new Error(errorText || "Erro ao obter categorias atuais do email.");
+    throw new Error(
+      errorText ||
+        "Erro ao obter categorias atuais do email."
+    );
   }
 
   const messageData = await getResponse.json();
+
   const currentCategories = Array.isArray(messageData.categories)
     ? messageData.categories
     : [];
 
+  /*
+   * Categorias funcionais existentes no backend:
+   * Outro, Mensagem Spam, Iluminação Pública, etc.
+   */
+  const backendCategoryNames = categoriesCache
+    .map((category) =>
+      cleanOutlookCategoryName(category?.nome)
+    )
+    .filter(Boolean)
+    .map((category) =>
+      normalizeCategoryForComparison(category)
+    );
+
+  const normalizedIncomingCategories = categoryNames.map(
+    (category) =>
+      normalizeCategoryForComparison(category)
+  );
+
+  /*
+   * Só substituímos a categoria funcional antiga quando
+   * a chamada inclui uma nova categoria funcional.
+   *
+   * Assim, chamadas que apenas adicionam estados como
+   * "2. Resposta gerada" não removem a categoria do email.
+   */
+  const hasIncomingFunctionalCategory =
+    normalizedIncomingCategories.some((category) =>
+      backendCategoryNames.includes(category)
+    );
+
+  const categoriesToKeep = hasIncomingFunctionalCategory
+    ? currentCategories.filter((category) => {
+        const normalizedCategory =
+          normalizeCategoryForComparison(category);
+
+        return !backendCategoryNames.includes(
+          normalizedCategory
+        );
+      })
+    : currentCategories;
+
   const mergedCategories = orderOutlookCategories([
-    ...currentCategories,
+    ...categoriesToKeep,
     ...categoryNames,
   ]);
 
+  console.log("Categorias atuais do email:", currentCategories);
+  console.log("Novas categorias recebidas:", categoryNames);
+  console.log("Categorias finais do email:", mergedCategories);
+
   const patchResponse = await fetch(
-    `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(graphMessageId)}`,
+    `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(
+      graphMessageId
+    )}`,
     {
       method: "PATCH",
       headers: {
@@ -3280,17 +3588,29 @@ async function applyCategoryAndMarkReadByGraphId(graphMessageId, rawCategory) {
   if (!patchResponse.ok) {
     const errorText = await patchResponse.text();
 
-    if (isGraphAuthenticationError(patchResponse, errorText)) {
+    if (isGraphAuthenticationError(
+      patchResponse,
+      errorText
+    )) {
       handleInvalidGraphSession();
     }
 
-    throw new Error(errorText || "Erro ao aplicar categoria e marcar como lido.");
+    throw new Error(
+      errorText ||
+        "Erro ao aplicar categoria e marcar como lido."
+    );
   }
 
   try {
-    await copyMessageToOutlookLabelFolders(graphMessageId, categoryNames);
+    await copyMessageToOutlookLabelFolders(
+      graphMessageId,
+      categoryNames
+    );
   } catch (labelCopyError) {
-    console.warn("Categorias aplicadas, mas não foi possível copiar para as pastas-label:", labelCopyError);
+    console.warn(
+      "Categorias aplicadas, mas não foi possível copiar para as pastas-label:",
+      labelCopyError
+    );
   }
 }
 
