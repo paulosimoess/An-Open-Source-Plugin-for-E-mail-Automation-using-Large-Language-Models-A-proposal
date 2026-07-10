@@ -190,99 +190,162 @@ export default async function categoriaRoutes(fastify, opts) {
     }
   });
   // DELETE /implementacao/:id_implementacao/categoria/:id_categoria
-  fastify.delete("/implementacao/:id_implementacao/categoria/:id_categoria", async (request, reply) => {
+fastify.delete(
+  "/implementacao/:id_implementacao/categoria/:id_categoria",
+  async (request, reply) => {
     const { id_implementacao, id_categoria } = request.params;
-    console.log(`Recebido para excluir categoria: Implementação ${id_implementacao}, Categoria ${id_categoria}`);
+    const client = await pool.connect();
+
+    console.log(
+      `Recebido para excluir categoria: Implementação ${id_implementacao}, Categoria ${id_categoria}`
+    );
 
     try {
-        // 1. Verificar se a categoria existe
-        const categoriaCheck = await pool.query(
-            `SELECT *
-             FROM categoria
-             WHERE id_categoria = $1 AND id_implementacao = $2`,
-            [id_categoria, id_implementacao]
-        );
+      await client.query("BEGIN");
 
-        if (categoriaCheck.rowCount === 0) {
-            return reply.code(404).send({ error: "Categoria não encontrada" });
-        }
+      // 1. Verificar se a categoria existe
+      const categoriaCheck = await client.query(
+        `SELECT id_categoria, nome
+         FROM categoria
+         WHERE id_categoria = $1
+           AND id_implementacao = $2
+         FOR UPDATE`,
+        [id_categoria, id_implementacao]
+      );
 
-        // 2. Obter categoria ".Outro"
-        const outroResult = await pool.query(
-            `SELECT id_categoria
-             FROM categoria
-             WHERE id_implementacao = $1
-               AND LOWER(nome) IN ('.outro', 'outro')`,
-            [id_implementacao]
-        );
+      if (categoriaCheck.rowCount === 0) {
+        await client.query("ROLLBACK");
 
-        if (outroResult.rowCount === 0) {
-            return reply.code(400).send({
-                error: "Categoria '.Outro' não encontrada nesta implementação"
-            });
-        }
-
-        const idCategoriaOutro = outroResult.rows[0].id_categoria;
-
-        // 3. Obter threads com categorização ativa na categoria a eliminar
-        const threadsParaReclassificar = await pool.query(
-            `SELECT thread_id
-             FROM thread_categorizacao
-             WHERE id_categoria = $1
-               AND ativa = true`,
-            [id_categoria]
-        );
-
-        // 4. Reclassificar threads para .Outro
-        for (const row of threadsParaReclassificar.rows) {
-            const threadId = row.thread_id;
-
-            // 4.1 Desativar categorização atual (todas as categorias dessa thread)
-            await pool.query(
-                `UPDATE thread_categorizacao
-                 SET ativa = false
-                 WHERE thread_id = $1
-                   AND ativa = true`,
-                [threadId]
-            );
-
-            // 4.2 Criar nova categorização para .Outro
-            await pool.query(
-                `INSERT INTO thread_categorizacao
-                    (thread_id, id_categoria, id_tipo_categorizacao, ativa, data)
-                 VALUES ($1, $2, 3, true, NOW())
-                 ON CONFLICT (id_categoria, thread_id) DO UPDATE
-                   SET ativa = true,
-                       id_tipo_categorizacao = 3,
-                       data = NOW()`,
-                [threadId, idCategoriaOutro]
-            );
-        }
-
-        // 5. Apagar keywords associadas à categoria
-        await pool.query(
-            `DELETE FROM keyword
-            WHERE id_categoria = $1`,
-            [id_categoria]
-        );
-
-        // 5. Apagar categoria (cascade para keywords se existir FK)
-        const result = await pool.query(
-            `DELETE FROM categoria
-             WHERE id_categoria = $1 AND id_implementacao = $2
-             RETURNING *`,
-            [id_categoria, id_implementacao]
-        );
-
-        return reply.send({
-            message: "Categoria eliminada com sucesso e threads reclassificadas para '.Outro'",
-            categoria: result.rows[0],
-            threads_reclassificadas: threadsParaReclassificar.rowCount
+        return reply.code(404).send({
+          error: "Categoria não encontrada"
         });
+      }
 
+      const categoriaAEliminar = categoriaCheck.rows[0];
+
+      // 2. Impedir a eliminação da categoria de fallback ".Outro"
+      if (normalizeText(categoriaAEliminar.nome).replace(/^\./, "") === "outro") {
+        await client.query("ROLLBACK");
+
+        return reply.code(400).send({
+          error: "A categoria '.Outro' não pode ser eliminada"
+        });
+      }
+
+      // 3. Obter a categoria ".Outro" da mesma implementação
+      const outroResult = await client.query(
+        `SELECT id_categoria
+         FROM categoria
+         WHERE id_implementacao = $1
+           AND LOWER(TRIM(nome)) IN ('.outro', 'outro')
+         LIMIT 1
+         FOR UPDATE`,
+        [id_implementacao]
+      );
+
+      if (outroResult.rowCount === 0) {
+        await client.query("ROLLBACK");
+
+        return reply.code(400).send({
+          error: "Categoria '.Outro' não encontrada nesta implementação"
+        });
+      }
+
+      const idCategoriaOutro = outroResult.rows[0].id_categoria;
+
+      // 4. Obter as threads atualmente classificadas com a categoria
+      const threadsParaReclassificar = await client.query(
+        `SELECT DISTINCT thread_id
+         FROM thread_categorizacao
+         WHERE id_categoria = $1
+           AND ativa = true`,
+        [id_categoria]
+      );
+
+      // 5. Reclassificar cada thread para ".Outro"
+      for (const row of threadsParaReclassificar.rows) {
+        const threadId = row.thread_id;
+
+        // 5.1 Desativar todas as categorizações ativas da thread
+        await client.query(
+          `UPDATE thread_categorizacao
+           SET ativa = false
+           WHERE thread_id = $1
+             AND ativa = true`,
+          [threadId]
+        );
+
+        // 5.2 Criar ou reativar a categorização ".Outro"
+        await client.query(
+          `INSERT INTO thread_categorizacao
+             (
+               thread_id,
+               id_categoria,
+               id_tipo_categorizacao,
+               ativa,
+               data
+             )
+           VALUES ($1, $2, 3, true, NOW())
+           ON CONFLICT (id_categoria, thread_id)
+           DO UPDATE SET
+             ativa = true,
+             id_tipo_categorizacao = 3,
+             data = NOW()`,
+          [threadId, idCategoriaOutro]
+        );
+      }
+
+      // 6. Apagar todas as relações antigas com a categoria eliminada
+      // Inclui relações ativas e inativas.
+      await client.query(
+        `DELETE FROM thread_categorizacao
+         WHERE id_categoria = $1`,
+        [id_categoria]
+      );
+
+      // 7. Apagar as keywords associadas
+      await client.query(
+        `DELETE FROM keyword
+         WHERE id_categoria = $1`,
+        [id_categoria]
+      );
+
+      // 8. Apagar a categoria
+      const result = await client.query(
+        `DELETE FROM categoria
+         WHERE id_categoria = $1
+           AND id_implementacao = $2
+         RETURNING *`,
+        [id_categoria, id_implementacao]
+      );
+
+      if (result.rowCount === 0) {
+        throw new Error("A categoria não foi eliminada");
+      }
+
+      await client.query("COMMIT");
+
+      return reply.send({
+        message:
+          "Categoria eliminada com sucesso e threads reclassificadas para '.Outro'",
+        categoria: result.rows[0],
+        threads_reclassificadas: threadsParaReclassificar.rowCount
+      });
     } catch (err) {
-        request.log.error(err);
-        return reply.code(500).send({ error: "Erro ao eliminar categoria" });
+      try {
+        await client.query("ROLLBACK");
+      } catch (rollbackError) {
+        request.log.error(rollbackError);
+      }
+
+      request.log.error(err);
+
+      return reply.code(500).send({
+        error: "Erro ao eliminar categoria"
+      });
+    } finally {
+      client.release();
     }
-  });
+  }
+);
 }
