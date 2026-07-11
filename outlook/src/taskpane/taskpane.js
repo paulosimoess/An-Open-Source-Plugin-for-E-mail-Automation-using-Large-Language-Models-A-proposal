@@ -26,6 +26,8 @@ let lastResponseId = null;
 let categoriesCache = [];
 let selectedCategory = null;
 let pendingDeleteCategoryId = null;
+let loadCategoriesPromise = null;
+let syncCategoriesPromise = null;
 
 const GRAPH_STATE_CACHE_KEY = "ai4ap_graph_email_states";
 const GRAPH_AUTH_CACHE_KEY = "ai4ap_graph_auth_session_v3";
@@ -1011,24 +1013,38 @@ async function handleMicrosoftNaaLoginOnly(options = {}) {
     validateMsalConfig();
 
     if (!silent) {
-      setGraphStatus("A testar autenticação Microsoft por SSO/NAA...");
+      setGraphStatus(
+        "A testar autenticação Microsoft por SSO/NAA..."
+      );
     }
 
     const supported = isNaaSupported();
 
     if (!supported) {
-      throw new Error("Nested App Authentication não está suportado neste cliente Outlook.");
+      throw new Error(
+        "Nested App Authentication não está suportado neste cliente Outlook."
+      );
     }
 
-    const session = await acquireNaaGraphSession(undefined, {
-      interactive: !silent,
-    });
+    const session = await acquireNaaGraphSession(
+      undefined,
+      {
+        interactive: !silent,
+      }
+    );
 
     graphAccessToken = session.accessToken;
-    graphAccountUsername = session.username || "Conta autenticada";
+    graphAccountUsername =
+      session.username || "Conta autenticada";
 
-    saveGraphAuthSession(graphAccessToken, graphAccountUsername);
+    saveGraphAuthSession(
+      graphAccessToken,
+      graphAccountUsername
+    );
+
     updateGraphAccountUi();
+
+    await syncLoadedCategoriesWithOutlook();
 
     setGraphStatus(
       silent
@@ -1038,7 +1054,10 @@ async function handleMicrosoftNaaLoginOnly(options = {}) {
 
     return true;
   } catch (error) {
-    console.warn("SSO/NAA Microsoft indisponível:", error);
+    console.warn(
+      "SSO/NAA Microsoft indisponível:",
+      error
+    );
 
     if (!silent) {
       setGraphStatus(
@@ -1062,32 +1081,48 @@ async function handleMicrosoftLogin() {
       return;
     }
 
-    setGraphStatus("A abrir autenticação Microsoft atual como fallback...");
+    setGraphStatus(
+      "A abrir autenticação Microsoft atual como fallback..."
+    );
 
-    await openMicrosoftAuthDialog("login");
+    const loginWorked = await openMicrosoftAuthDialog("login");
+
+    if (loginWorked) {
+      await syncLoadedCategoriesWithOutlook();
+    }
   } catch (error) {
     console.error("Erro no login Microsoft:", error);
-    setGraphStatus(`Erro no login Microsoft: ${error.message}`, true);
+
+    setGraphStatus(
+      `Erro no login Microsoft: ${error.message}`,
+      true
+    );
   }
 }
 
 async function tryRestoreMicrosoftSessionAutomatically() {
   try {
     if (graphAccessToken) {
+      await syncLoadedCategoriesWithOutlook();
       return true;
     }
 
     const restoredFromCache = loadGraphAuthSession();
 
     if (restoredFromCache) {
+      updateGraphAccountUi();
+      await syncLoadedCategoriesWithOutlook();
       return true;
     }
 
-    setGraphStatus("A tentar recuperar sessão Microsoft automaticamente...");
+    setGraphStatus(
+      "A tentar recuperar sessão Microsoft automaticamente..."
+    );
 
-    const restoredWithNaa = await handleMicrosoftNaaLoginOnly({
-      silent: true,
-    });
+    const restoredWithNaa =
+      await handleMicrosoftNaaLoginOnly({
+        silent: true,
+      });
 
     if (restoredWithNaa) {
       return true;
@@ -1096,7 +1131,11 @@ async function tryRestoreMicrosoftSessionAutomatically() {
     updateGraphAccountUi();
     return false;
   } catch (error) {
-    console.warn("Não foi possível recuperar sessão automaticamente:", error);
+    console.warn(
+      "Não foi possível recuperar sessão automaticamente:",
+      error
+    );
+
     updateGraphAccountUi();
     return false;
   }
@@ -2079,42 +2118,134 @@ function setCategoryStatus(message, isError = false) {
   statusEl.style.color = isError ? "#b00020" : "#333";
 }
 
-async function handleLoadCategories() {
-  try {
-    setCategoryStatus("A carregar categorias...");
-    setHtml("categories-list", "A carregar categorias...");
-    setText("selected-category", "Nenhuma categoria selecionada.");
-    setHtml("keywords-list", "Nenhuma palavra-chave carregada.");
+function isMicrosoftSessionNotReadyError(error) {
+  const message = String(error?.message || "").toLowerCase();
 
-    const categories = await getCategories();
+  return (
+    message.includes("ainda não existe sessão microsoft") ||
+    message.includes("sessão microsoft não iniciada") ||
+    message.includes("iniciar sessão microsoft") ||
+    message.includes("microsoft session")
+  );
+}
 
-    categoriesCache = Array.isArray(categories) ? categories : [];
+async function syncLoadedCategoriesWithOutlook() {
+  if (syncCategoriesPromise) {
+    return syncCategoriesPromise;
+  }
 
-    renderCategoriesList(categoriesCache);
-    renderCategoryFilterOptions(categoriesCache);
-
-    let labelsCreatedCount = 0;
+  syncCategoriesPromise = (async () => {
+    if (!Array.isArray(categoriesCache) || categoriesCache.length === 0) {
+      return {
+        synchronized: false,
+        labelsCreatedCount: 0,
+      };
+    }
 
     try {
-      labelsCreatedCount = await ensureOutlookLabelFolders(categoriesCache);
-    } catch (labelError) {
-      console.warn("Categorias carregadas, mas não foi possível criar labels no Outlook:", labelError);
+      const labelsCreatedCount =
+        await ensureOutlookLabelFolders(categoriesCache);
 
       setCategoryStatus(
-        `Categorias carregadas: ${categoriesCache.length}. Não foi possível criar as labels no Outlook: ${labelError.message}`,
+        `Categorias carregadas: ${categoriesCache.length}. ` +
+        `Pastas-label do Outlook garantidas: ${labelsCreatedCount}.`
+      );
+
+      return {
+        synchronized: true,
+        labelsCreatedCount,
+      };
+    } catch (error) {
+      if (isMicrosoftSessionNotReadyError(error)) {
+        setCategoryStatus(
+          `Categorias carregadas: ${categoriesCache.length}. ` +
+          `A sincronização com o Outlook será concluída quando a sessão Microsoft estiver disponível.`
+        );
+
+        return {
+          synchronized: false,
+          labelsCreatedCount: 0,
+          sessionNotReady: true,
+        };
+      }
+
+      console.error(
+        "Erro ao sincronizar categorias com o Outlook:",
+        error
+      );
+
+      setCategoryStatus(
+        `Categorias carregadas: ${categoriesCache.length}. ` +
+        `Não foi possível sincronizar as pastas-label com o Outlook: ${error.message}`,
         true
       );
 
-      return;
+      return {
+        synchronized: false,
+        labelsCreatedCount: 0,
+        error,
+      };
     }
+  })();
 
-    setCategoryStatus(
-      `Categorias carregadas: ${categoriesCache.length}. Labels Outlook garantidas: ${labelsCreatedCount}.`
-    );
-  } catch (error) {
-    console.error("Erro ao carregar categorias:", error);
-    setCategoryStatus(`Erro ao carregar categorias: ${error.message}`, true);
-    setHtml("categories-list", "Não foi possível carregar as categorias.");
+  try {
+    return await syncCategoriesPromise;
+  } finally {
+    syncCategoriesPromise = null;
+  }
+}
+
+async function handleLoadCategories() {
+  if (loadCategoriesPromise) {
+    return loadCategoriesPromise;
+  }
+
+  loadCategoriesPromise = (async () => {
+    try {
+      setCategoryStatus("A carregar categorias...");
+      setHtml("categories-list", "A carregar categorias...");
+      setText(
+        "selected-category",
+        "Nenhuma categoria selecionada."
+      );
+      setHtml(
+        "keywords-list",
+        "Nenhuma palavra-chave carregada."
+      );
+
+      const categories = await getCategories();
+
+      categoriesCache = Array.isArray(categories)
+        ? categories
+        : [];
+
+      renderCategoriesList(categoriesCache);
+      renderCategoryFilterOptions(categoriesCache);
+
+      await syncLoadedCategoriesWithOutlook();
+
+      return categoriesCache;
+    } catch (error) {
+      console.error("Erro ao carregar categorias:", error);
+
+      setCategoryStatus(
+        `Erro ao carregar categorias: ${error.message}`,
+        true
+      );
+
+      setHtml(
+        "categories-list",
+        "Não foi possível carregar as categorias."
+      );
+
+      throw error;
+    }
+  })();
+
+  try {
+    return await loadCategoriesPromise;
+  } finally {
+    loadCategoriesPromise = null;
   }
 }
 
