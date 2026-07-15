@@ -1,5 +1,5 @@
 const API_BASE_URL = "http://localhost:4000";
-const API_SECRET = "teste123";
+import { API_SECRET } from "./config.local.js";
 const IMPLEMENTACAO_ID = 1;
 
 let cachedToken = null;
